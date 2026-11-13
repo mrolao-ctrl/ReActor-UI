@@ -7,6 +7,7 @@ import modules.globals
 import modules.processors.frame.core
 from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces
+from modules.face_selector import select_matching_face
 from modules.typing import Face, Frame
 from modules.utilities import conditional_download, resolve_relative_path, is_image, is_video
 
@@ -17,7 +18,7 @@ NAME = 'REACTOR.FACE-SWAPPER'
 
 def pre_check() -> bool:
     download_directory_path = resolve_relative_path('../models')
-    conditional_download(download_directory_path, ['https://github.com/facefusion/facefusion-assets/releases/download/models/inswapper_128.onnx'])
+    conditional_download(download_directory_path, ['https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/inswapper_128.onnx'])
     return True
 
 
@@ -49,7 +50,15 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
 
 
 def process_frame(source_face: Face, temp_frame: Frame) -> Frame:
-    if modules.globals.many_faces:
+    # An explicitly selected identity takes priority over the legacy modes.
+    # If a frame is ambiguous, do not swap anyone in that frame.
+    if modules.globals.target_face_embedding is not None:
+        target_face = select_matching_face(
+            get_many_faces(temp_frame), modules.globals.target_face_embedding
+        )
+        if target_face is not None:
+            temp_frame = swap_face(source_face, target_face, temp_frame)
+    elif modules.globals.many_faces:
         many_faces = get_many_faces(temp_frame)
         if many_faces:
             for target_face in many_faces:
