@@ -10,10 +10,14 @@ import threading
 import cv2
 
 
+class UnreadableFrameError(RuntimeError):
+    """A missing/corrupt source frame can be recovered after a processing pass."""
+
+
 def read_image(path: str, description: str = 'image'):
     image = cv2.imread(path, cv2.IMREAD_COLOR)
     if image is None:
-        raise RuntimeError(
+        raise UnreadableFrameError(
             f'Cannot read {description}: {path}. The file may be missing, '
             'incomplete or corrupted (for example after the disk ran out '
             'of space). Verify the file before restarting processing.'
