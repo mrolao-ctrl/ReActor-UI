@@ -196,6 +196,8 @@ def start() -> None:
     update_status('Extracting frames...')
     extract_frames(modules.globals.target_path)
     temp_frame_paths = get_temp_frame_paths(modules.globals.target_path)
+    if not temp_frame_paths:
+        raise RuntimeError('No video frames were extracted. Check the input video and free disk space.')
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
         update_status('Progressing...', frame_processor.NAME)
         frame_processor.process_video(modules.globals.source_path, temp_frame_paths)
@@ -218,12 +220,14 @@ def start() -> None:
         restore_audio(modules.globals.target_path, modules.globals.output_path)
     else:
         move_temp(modules.globals.target_path, modules.globals.output_path)
-    # clean and validate
+    # Validate the actual output before removing any temporary frames.
+    if not is_video(modules.globals.output_path) or os.path.getsize(modules.globals.output_path) == 0:
+        raise RuntimeError(
+            'No valid output video was produced. Temporary frames have been '
+            'preserved for diagnosis; check the preceding errors.'
+        )
     clean_temp(modules.globals.target_path)
-    if is_video(modules.globals.target_path):
-        update_status('Processing to video succeed!')
-    else:
-        update_status('Processing to video failed!')
+    update_status('Processing to video succeed!')
 
 
 def destroy() -> None:
