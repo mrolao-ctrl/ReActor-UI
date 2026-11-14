@@ -14,7 +14,7 @@ from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
 
 ROOT = None
-ROOT_HEIGHT = 700
+ROOT_HEIGHT = 810
 ROOT_WIDTH = 600
 
 PREVIEW = None
@@ -53,6 +53,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
 
     root = ctk.CTk()
     root.minsize(ROOT_WIDTH, ROOT_HEIGHT)
+    root.geometry(f'{ROOT_WIDTH}x{ROOT_HEIGHT}')
     root.title(f'{modules.metadata.name} {modules.metadata.version} {modules.metadata.edition}')
     root.configure()
     root.protocol('WM_DELETE_WINDOW', lambda: destroy())
@@ -97,20 +98,43 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     nsfw_switch = ctk.CTkSwitch(root, text='NSFW', variable=nsfw_value, cursor='hand2', command=lambda: setattr(modules.globals, 'nsfw', nsfw_value.get()))
     nsfw_switch.place(relx=0.6, rely=0.7)
 
+    mode_label = ctk.CTkLabel(root, text='Enhancer method:')
+    mode_label.place(relx=0.1, rely=0.745)
+    mode_menu = ctk.CTkOptionMenu(
+        root, values=['GFPGAN', 'Sharpen only'],
+        command=lambda value: setattr(modules.globals, 'enhancer_mode', value)
+    )
+    mode_menu.set(modules.globals.enhancer_mode)
+    mode_menu.place(relx=0.54, rely=0.745, relwidth=0.36)
+
+    strength_label = ctk.CTkLabel(root, text=f'Strength: {modules.globals.enhancer_strength}%')
+    strength_label.place(relx=0.1, rely=0.795)
+    strength_slider = ctk.CTkSlider(
+        root, from_=0, to=100, number_of_steps=20,
+        command=lambda value: set_enhancer_strength(value, strength_label)
+    )
+    strength_slider.set(modules.globals.enhancer_strength)
+    strength_slider.place(relx=0.45, rely=0.80, relwidth=0.45)
+
+    compare_button = ctk.CTkButton(
+        root, text='Compare enhancer (1 frame)', command=compare_enhancer
+    )
+    compare_button.place(relx=0.28, rely=0.84, relwidth=0.44, relheight=0.045)
+
     start_button = ctk.CTkButton(root, text='Start', cursor='hand2', command=lambda: select_output_path(start))
-    start_button.place(relx=0.15, rely=0.80, relwidth=0.2, relheight=0.05)
+    start_button.place(relx=0.15, rely=0.885, relwidth=0.2, relheight=0.045)
 
     stop_button = ctk.CTkButton(root, text='Destroy', cursor='hand2', command=lambda: destroy())
-    stop_button.place(relx=0.4, rely=0.80, relwidth=0.2, relheight=0.05)
+    stop_button.place(relx=0.4, rely=0.885, relwidth=0.2, relheight=0.045)
 
     preview_button = ctk.CTkButton(root, text='Preview', cursor='hand2', command=lambda: toggle_preview())
-    preview_button.place(relx=0.65, rely=0.80, relwidth=0.2, relheight=0.05)
+    preview_button.place(relx=0.65, rely=0.885, relwidth=0.2, relheight=0.045)
 
     status_label = ctk.CTkLabel(root, text=None, justify='center')
-    status_label.place(relx=0.1, rely=0.9, relwidth=0.8)
+    status_label.place(relx=0.1, rely=0.935, relwidth=0.8)
 
     donate_label = ctk.CTkLabel(root, text='Gourieff GitHub', justify='center', cursor='hand2')
-    donate_label.place(relx=0.1, rely=0.95, relwidth=0.8)
+    donate_label.place(relx=0.1, rely=0.967, relwidth=0.8)
     donate_label.configure(text_color=ctk.ThemeManager.theme.get('URL').get('text_color'))
     donate_label.bind('<Button>', lambda event: webbrowser.open('https://github.com/Gourieff'))
 
@@ -142,6 +166,69 @@ def update_status(text: str) -> None:
 
 def update_tumbler(var: str, value: bool) -> None:
     modules.globals.fp_ui[var] = value
+
+
+def set_enhancer_strength(value: float, label: ctk.CTkLabel) -> None:
+    percentage = max(0, min(100, int(round(value))))
+    modules.globals.enhancer_strength = percentage
+    label.configure(text=f'Strength: {percentage}%')
+
+
+def compare_enhancer() -> None:
+    """Render the face swap and GFPGAN once, then compare blend levels locally."""
+    if not modules.globals.source_path or not modules.globals.target_path:
+        update_status('Select a source face and a target first.')
+        return
+
+    from modules.processors.frame import face_swapper, face_enhancer
+    from modules.enhancement import blend_selected_faces
+
+    frame_number = 1
+    if is_video(modules.globals.target_path) and PREVIEW.state() == 'normal':
+        frame_number = max(1, int(round(preview_slider.get())) + 1)
+    if is_video(modules.globals.target_path):
+        frame = get_video_frame(modules.globals.target_path, frame_number)
+    else:
+        frame = cv2.imread(modules.globals.target_path)
+    if frame is None:
+        update_status('Cannot read comparison frame.')
+        return
+
+    comparison = ctk.CTkToplevel(ROOT)
+    comparison.title(f'Enhancer comparison - frame {frame_number}')
+    comparison.geometry('1030x650')
+    ctk.CTkLabel(
+        comparison,
+        text='Processing one frame locally. GFPGAN can take a while on CPU.'
+    ).pack(pady=6)
+    comparison.update_idletasks()
+
+    try:
+        face_swapper_source = face_swapper.load_source_face(modules.globals.source_path)
+        swapped = face_swapper.process_frame(face_swapper_source, frame)
+        boxes = list(modules.globals.preview_face_boxes)
+        if not boxes:
+            ctk.CTkLabel(comparison, text='No selected face in this frame. Try another one.').pack()
+            return
+        candidate = face_enhancer.enhanced_candidate(swapped)
+        grid = ctk.CTkFrame(comparison)
+        grid.pack(fill='both', expand=True, padx=12, pady=12)
+        for column, amount in enumerate((0, 40, 70)):
+            sample = blend_selected_faces(swapped, candidate, boxes, amount)
+            image = Image.fromarray(cv2.cvtColor(sample, cv2.COLOR_BGR2RGB))
+            image = ImageOps.contain(image, (315, 525), Image.LANCZOS)
+            shown = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+            cell = ctk.CTkFrame(grid)
+            cell.grid(row=0, column=column, padx=7, sticky='n')
+            ctk.CTkLabel(cell, text=f'{amount}% enhancement').pack(pady=4)
+            preview = ctk.CTkLabel(cell, image=shown, text='')
+            preview.image = shown
+            preview.pack(pady=4)
+        ctk.CTkLabel(
+            comparison, text='Preview only. The video has not been modified.'
+        ).pack(pady=5)
+    except Exception as error:
+        ctk.CTkLabel(comparison, text=f'Comparison failed: {error}', wraplength=850).pack(pady=20)
 
 
 def set_many_faces(enabled: bool) -> None:
@@ -364,7 +451,7 @@ def init_preview() -> None:
 
 def update_preview(frame_number: int = 0) -> None:
     if modules.globals.source_path and modules.globals.target_path:
-        temp_frame = get_video_frame(modules.globals.target_path, frame_number)
+        temp_frame = get_video_frame(modules.globals.target_path, max(1, int(round(frame_number)) + 1))
         if modules.globals.nsfw == False:
             from modules.predicter import predict_frame
             if predict_frame(temp_frame):
