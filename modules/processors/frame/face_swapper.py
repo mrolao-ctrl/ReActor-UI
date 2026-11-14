@@ -1,4 +1,5 @@
 from typing import Any, List
+import os
 import cv2
 import insightface
 import threading
@@ -8,7 +9,7 @@ import modules.processors.frame.core
 from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import select_matching_face
-from modules.frame_io import read_image, write_frame
+from modules.frame_io import read_image, write_frame, UnreadableFrameError
 from modules.typing import Face, Frame
 from modules.utilities import conditional_download, resolve_relative_path, is_image, is_video
 
@@ -62,32 +63,40 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     return get_face_swapper().get(temp_frame, target_face, source_face, paste_back=True)
 
 
-def process_frame(source_face: Face, temp_frame: Frame) -> Frame:
-    # An explicitly selected identity takes priority over the legacy modes.
-    # If a frame is ambiguous, do not swap anyone in that frame.
+def process_frame(source_face: Face, temp_frame: Frame, frame_path=None) -> Frame:
+    # Record selected face coordinates BEFORE the swap changes the identity.
     if modules.globals.target_face_embedding is not None:
-        target_face = select_matching_face(
+        chosen = select_matching_face(
             get_many_faces(temp_frame), modules.globals.target_face_embedding
         )
-        if target_face is not None:
-            temp_frame = swap_face(source_face, target_face, temp_frame)
+        targets = [chosen] if chosen is not None else []
     elif modules.globals.many_faces:
-        many_faces = get_many_faces(temp_frame)
-        if many_faces:
-            for target_face in many_faces:
-                temp_frame = swap_face(source_face, target_face, temp_frame)
+        targets = get_many_faces(temp_frame) or []
     else:
-        target_face = get_one_face(temp_frame)
-        if target_face:
-            temp_frame = swap_face(source_face, target_face, temp_frame)
+        chosen = get_one_face(temp_frame)
+        targets = [chosen] if chosen is not None else []
+
+    boxes = [tuple(map(float, face.bbox)) for face in targets]
+    for target_face in targets:
+        temp_frame = swap_face(source_face, target_face, temp_frame)
+
+    if frame_path is None:
+        modules.globals.preview_face_boxes = boxes
+    else:
+        modules.globals.frame_target_boxes[os.path.abspath(frame_path)] = boxes
     return temp_frame
 
 
 def process_frames(source_face: Face, temp_frame_paths: List[str], progress: Any = None) -> None:
-    # The reference face is loaded once for the whole video, not once per frame.
     for temp_frame_path in temp_frame_paths:
-        temp_frame = read_image(temp_frame_path, 'extracted video frame')
-        result = process_frame(source_face, temp_frame)
+        try:
+            temp_frame = read_image(temp_frame_path, 'extracted video frame')
+        except UnreadableFrameError as error:
+            print(f'[REACTOR.RECOVERY] Will restore unreadable frame after this stage: {error}')
+            if progress:
+                progress.update(1)
+            continue
+        result = process_frame(source_face, temp_frame, frame_path=temp_frame_path)
         write_frame(temp_frame_path, result)
         if progress:
             progress.update(1)
