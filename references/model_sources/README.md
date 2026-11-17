@@ -11,7 +11,7 @@ trees. Do not mistake them for a working replacement of `.onnx` files.
 - [Reference copy: `insightface_inswapper.py`](insightface_inswapper.py)
 - Original: https://github.com/deepinsight/insightface/blob/c6c3af7bd2d0a0bf4b78c78437357f3521aa5d52/python-package/insightface/model_zoo/inswapper.py
 - Upstream revision: `c6c3af7bd2d0a0bf4b78c78437357f3521aa5d52`
-- Code license: **MIT** according to the [InsightFace Python library README](https://github.com/deepinsight/insightface/blob/master/python-package/README.md#license). The pretrained models **do not have the same unrestricted code license**. InsightFace's project README describes noncommercial research restrictions and directs requests for licensing inswapper models to `contact@insightface.ai`: https://github.com/deepinsight/insightface#license
+- Code license: **MIT** (see [local notice](MIT-InsightFace.txt)) according to the [InsightFace Python library README](https://github.com/deepinsight/insightface/blob/master/python-package/README.md#license). The pretrained models **do not have the same unrestricted code license**. InsightFace's project README describes noncommercial research restrictions and directs requests for licensing inswapper models to `contact@insightface.ai`: https://github.com/deepinsight/insightface#license
 
 The file shows preprocessing/alignment, source identity embedding preparation,
 ONNX Runtime inference, and pasting/blending the output back into the frame.
