@@ -33,8 +33,9 @@ enhancer_strength = 40
 enhancer_mode = 'GFPGAN'  # or 'Sharpen only'
 # Opt-in XSeg: preserves hands, glasses and other foreground objects.
 occlusion_protection = False
-# Auto tries five points when lower-face geometry is plausible; otherwise eyes/nose.
-occlusion_landmark_mode = 'auto'  # auto / 3-point / 5-point
+# Auto uses 5/3 points when plausible and two only when labelled slots are missing.
+# Force a visible-side eye+mouth pair for experimental side-profile alignment.
+occlusion_landmark_mode = 'auto'  # auto / 2-point-left / 2-point-right / 3-point / 5-point
 # Face boxes are recorded before swapping, because swapping changes identity.
 # Keys are absolute paths of extracted PNG frames.
 frame_target_boxes = {}
