@@ -31,6 +31,8 @@ frames_fps = 30.0
 # Strength 0..100 blends GFPGAN with the unenhanced face-swap output.
 enhancer_strength = 40
 enhancer_mode = 'GFPGAN'  # or 'Sharpen only'
+# Opt-in XSeg: preserves hands, glasses and other foreground objects.
+occlusion_protection = False
 # Face boxes are recorded before swapping, because swapping changes identity.
 # Keys are absolute paths of extracted PNG frames.
 frame_target_boxes = {}

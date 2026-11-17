@@ -7,7 +7,11 @@ import gfpgan
 import modules.globals
 import modules.processors.frame.core
 from modules.core import update_status
-from modules.face_analyser import get_one_face
+from modules.face_analyser import get_one_face, get_many_faces
+from modules.face_occlusion import (
+    combine_visibility, get_visibility_mask, select_faces_by_boxes, warn_once
+)
+import numpy as np
 from modules.enhancement import blend_selected_faces, sharpen_frame
 from modules.frame_io import read_image, write_frame, UnreadableFrameError
 from modules.typing import Frame, Face
@@ -89,8 +93,30 @@ def process_frame(
     boxes = target_boxes(temp_frame, frame_path)
     if not boxes:
         return temp_frame
+
+    visibility = None
+    if modules.globals.occlusion_protection:
+        # GFPGAN may otherwise paint over a hand/object restored by the swap.
+        # Match the pre-swap face boxes by location, NOT by changed identity.
+        faces = select_faces_by_boxes(get_many_faces(temp_frame), boxes)
+        if not faces:
+            warn_once('Cannot locate the selected face for safe enhancement; skipping')
+            return temp_frame
+        try:
+            visibility = np.ones(temp_frame.shape[:2], dtype=np.float32)
+            for face in faces:
+                visibility = np.minimum(
+                    visibility, get_visibility_mask(temp_frame, face)
+                )
+        except (RuntimeError, OSError, ValueError, cv2.error) as error:
+            warn_once(f'Enhancer occlusion mask failed; keeping original: {error}')
+            return temp_frame
+
     candidate = enhanced_candidate(temp_frame, mode)
-    return blend_selected_faces(temp_frame, candidate, boxes, strength)
+    enhanced = blend_selected_faces(temp_frame, candidate, boxes, strength)
+    if visibility is not None:
+        return combine_visibility(temp_frame, enhanced, visibility)
+    return enhanced
 
 
 def process_frames(source_path: str, temp_frame_paths: List[str], progress: Any = None) -> None:

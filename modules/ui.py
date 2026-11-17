@@ -15,7 +15,7 @@ from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
 
 ROOT = None
-ROOT_HEIGHT = 950
+ROOT_HEIGHT = 1030
 ROOT_WIDTH = 600
 
 PREVIEW = None
@@ -138,42 +138,56 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         command=lambda: setattr(modules.globals, 'nsfw', bool(nsfw_value.get()))
     ).place(relx=0.6, rely=0.695)
 
-    ctk.CTkLabel(root, text='Enhancer method:').place(relx=0.1, rely=0.74)
+    protection_value = ctk.BooleanVar(
+        value=bool(modules.globals.occlusion_protection)
+    )
+    ctk.CTkSwitch(
+        root, text='Occlusion protection (XSeg)',
+        variable=protection_value, cursor='hand2',
+        command=lambda: setattr(
+            modules.globals, 'occlusion_protection', bool(protection_value.get())
+        )
+    ).place(relx=0.1, rely=0.738)
+    ctk.CTkLabel(
+        root, text='Experimental / local CPU', font=ctk.CTkFont(size=11)
+    ).place(relx=0.59, rely=0.738)
+
+    ctk.CTkLabel(root, text='Enhancer method:').place(relx=0.1, rely=0.776)
     mode_menu = ctk.CTkOptionMenu(
         root, values=['GFPGAN', 'Sharpen only'],
         command=lambda value: setattr(modules.globals, 'enhancer_mode', value)
     )
     mode_menu.set(modules.globals.enhancer_mode)
-    mode_menu.place(relx=0.54, rely=0.74, relwidth=0.36)
+    mode_menu.place(relx=0.54, rely=0.776, relwidth=0.36)
 
     strength_label = ctk.CTkLabel(root, text=f'Strength: {modules.globals.enhancer_strength}%')
-    strength_label.place(relx=0.1, rely=0.795)
+    strength_label.place(relx=0.1, rely=0.820)
     strength_slider = ctk.CTkSlider(
         root, from_=0, to=100, number_of_steps=20,
         command=lambda value: set_enhancer_strength(value, strength_label)
     )
     strength_slider.set(modules.globals.enhancer_strength)
-    strength_slider.place(relx=0.45, rely=0.795, relwidth=0.45)
+    strength_slider.place(relx=0.45, rely=0.820, relwidth=0.45)
 
     ctk.CTkButton(
         root, text='Compare enhancer (1 frame)', command=compare_enhancer
-    ).place(relx=0.28, rely=0.835, relwidth=0.44, relheight=0.04)
+    ).place(relx=0.28, rely=0.858, relwidth=0.44, relheight=0.039)
 
     ctk.CTkButton(
         root, text='Start', cursor='hand2', command=lambda: select_output_path(start)
-    ).place(relx=0.15, rely=0.89, relwidth=0.2, relheight=0.044)
+    ).place(relx=0.15, rely=0.912, relwidth=0.2, relheight=0.042)
     ctk.CTkButton(
         root, text='Destroy', cursor='hand2', command=destroy
-    ).place(relx=0.4, rely=0.89, relwidth=0.2, relheight=0.044)
+    ).place(relx=0.4, rely=0.912, relwidth=0.2, relheight=0.042)
     ctk.CTkButton(
         root, text='Preview', cursor='hand2', command=toggle_preview
-    ).place(relx=0.65, rely=0.89, relwidth=0.2, relheight=0.044)
+    ).place(relx=0.65, rely=0.912, relwidth=0.2, relheight=0.042)
 
     status_label = ctk.CTkLabel(root, text='', justify='center')
-    status_label.place(relx=0.1, rely=0.94, relwidth=0.8)
+    status_label.place(relx=0.1, rely=0.952, relwidth=0.8)
 
     donate_label = ctk.CTkLabel(root, text='Gourieff GitHub', justify='center', cursor='hand2')
-    donate_label.place(relx=0.1, rely=0.975, relwidth=0.8)
+    donate_label.place(relx=0.1, rely=0.983, relwidth=0.8)
     donate_label.configure(text_color=ctk.ThemeManager.theme.get('URL').get('text_color'))
     donate_label.bind('<Button>', lambda event: webbrowser.open('https://github.com/Gourieff'))
     return root

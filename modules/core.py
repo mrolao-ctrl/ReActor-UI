@@ -48,6 +48,7 @@ def parse_args() -> None:
     program.add_argument('--video-quality', help='adjust output video quality', dest='video_quality', type=int, default=18, choices=range(52), metavar='[0-51]')
     program.add_argument('--enhancer-strength', help='GFPGAN blend strength 0..100', dest='enhancer_strength', type=int, default=40, choices=range(101))
     program.add_argument('--enhancer-mode', help='face restoration method', dest='enhancer_mode', choices=['gfpgan', 'sharpen'], default='gfpgan')
+    program.add_argument('--occlusion-protection', help='preserve foreground occluders using optional XSeg model', action='store_true', default=False)
     program.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=suggest_max_memory())
     program.add_argument('--execution-provider', help='execution provider', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
     program.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=suggest_execution_threads())
@@ -76,6 +77,7 @@ def parse_args() -> None:
     modules.globals.video_quality = args.video_quality
     modules.globals.enhancer_strength = args.enhancer_strength
     modules.globals.enhancer_mode = 'Sharpen only' if args.enhancer_mode == 'sharpen' else 'GFPGAN'
+    modules.globals.occlusion_protection = args.occlusion_protection
     modules.globals.max_memory = args.max_memory
     modules.globals.execution_providers = decode_execution_providers(args.execution_provider)
     modules.globals.execution_threads = args.execution_threads
@@ -177,6 +179,23 @@ def update_status(message: str, scope: str = 'REACTOR.CORE') -> None:
         ui.update_status(message)
 
 
+def report_content_rejection(media_type: str) -> None:
+    """Reject flagged input with a clear message instead of silently exiting.
+
+    Nothing is swapped or exported. Keep the GUI running so the user can
+    select another (non-explicit) input. Headless runs receive console text.
+    """
+    message = (
+        f'Processing stopped: the {media_type} was flagged by the '
+        'content-safety classifier. No face swap was performed. '
+        'Choose non-explicit footage.'
+    )
+    update_status(message, 'REACTOR.SAFETY')
+    if not modules.globals.headless and ui.ROOT is not None:
+        from tkinter import messagebox
+        messagebox.showwarning('ReActor - processing stopped', message, parent=ui.ROOT)
+
+
 def start() -> None:
     # Direct PNG mode never extracts frames or reads an original video.
     if modules.globals.frames_directory:
@@ -206,9 +225,11 @@ def start() -> None:
     # process image to image
     if has_image_extension(modules.globals.target_path):
         if modules.globals.nsfw == False:
+            update_status('Checking image content before processing...')
             from modules.predicter import predict_image
             if predict_image(modules.globals.target_path):
-                destroy()
+                report_content_rejection('image')
+                return
         shutil.copy2(modules.globals.target_path, modules.globals.output_path)
         for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
             update_status('Progressing...', frame_processor.NAME)
@@ -221,9 +242,11 @@ def start() -> None:
         return
     # process image to videos
     if modules.globals.nsfw == False:
+        update_status('Checking video content; face swap has not started...')
         from modules.predicter import predict_video
         if predict_video(modules.globals.target_path):
-            destroy()
+            report_content_rejection('video')
+            return
     update_status('Creating temp resources...')
     create_temp(modules.globals.target_path)
     update_status('Extracting frames...')
