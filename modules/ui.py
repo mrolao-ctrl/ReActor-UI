@@ -1,5 +1,6 @@
 import os
 import webbrowser
+from pathlib import Path
 import customtkinter as ctk
 from typing import Callable, Tuple
 import cv2
@@ -14,7 +15,7 @@ from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
 
 ROOT = None
-ROOT_HEIGHT = 810
+ROOT_HEIGHT = 950
 ROOT_WIDTH = 600
 
 PREVIEW = None
@@ -24,6 +25,9 @@ PREVIEW_MAX_WIDTH = 1200
 RECENT_DIRECTORY_SOURCE = None
 RECENT_DIRECTORY_TARGET = None
 RECENT_DIRECTORY_OUTPUT = None
+FRAMES_PREVIEW_PATHS = []
+assignments_label = None
+frames_fps_entry = None
 
 preview_label = None
 preview_slider = None
@@ -46,6 +50,7 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label, many_faces_switch
+    global assignments_label, frames_fps_entry
 
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode('system')
@@ -55,57 +60,91 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     root.minsize(ROOT_WIDTH, ROOT_HEIGHT)
     root.geometry(f'{ROOT_WIDTH}x{ROOT_HEIGHT}')
     root.title(f'{modules.metadata.name} {modules.metadata.version} {modules.metadata.edition}')
-    root.configure()
     root.protocol('WM_DELETE_WINDOW', lambda: destroy())
 
-    source_label = ctk.CTkLabel(root, text=None)
-    source_label.place(relx=0.1, rely=0.1, relwidth=0.3, relheight=0.25)
+    source_label = ctk.CTkLabel(root, text='Source face')
+    source_label.place(relx=0.1, rely=0.065, relwidth=0.3, relheight=0.23)
+    target_label = ctk.CTkLabel(root, text='Target video / frames')
+    target_label.place(relx=0.6, rely=0.065, relwidth=0.3, relheight=0.23)
 
-    target_label = ctk.CTkLabel(root, text=None)
-    target_label.place(relx=0.6, rely=0.1, relwidth=0.3, relheight=0.25)
+    ctk.CTkButton(root, text='Select a face', cursor='hand2',
+                  command=select_source_path).place(
+        relx=0.1, rely=0.31, relwidth=0.3, relheight=0.075
+    )
+    ctk.CTkButton(root, text='Select a target', cursor='hand2',
+                  command=select_target_path).place(
+        relx=0.6, rely=0.31, relwidth=0.3, relheight=0.075
+    )
 
-    source_button = ctk.CTkButton(root, text='Select a face', cursor='hand2', command=lambda: select_source_path())
-    source_button.place(relx=0.1, rely=0.4, relwidth=0.3, relheight=0.1)
+    ctk.CTkButton(root, text='Use existing PNG frames',
+                  command=select_frames_directory).place(
+        relx=0.1, rely=0.40, relwidth=0.35, relheight=0.05
+    )
+    ctk.CTkButton(root, text='Choose person (single)',
+                  command=open_face_picker).place(
+        relx=0.55, rely=0.40, relwidth=0.35, relheight=0.05
+    )
+    ctk.CTkButton(root, text='Clear person assignments',
+                  command=clear_assignments).place(
+        relx=0.1, rely=0.465, relwidth=0.35, relheight=0.05
+    )
+    ctk.CTkButton(root, text='Add person + source photo',
+                  command=lambda: open_face_picker(multiple=True)).place(
+        relx=0.55, rely=0.465, relwidth=0.35, relheight=0.05
+    )
 
-    target_button = ctk.CTkButton(root, text='Select a target', cursor='hand2', command=lambda: select_target_path())
-    target_button.place(relx=0.6, rely=0.4, relwidth=0.3, relheight=0.1)
+    assignments_label = ctk.CTkLabel(root, text='Mapped people: 0 (legacy single-face mode)')
+    assignments_label.place(relx=0.1, rely=0.525, relwidth=0.8)
 
-    person_button = ctk.CTkButton(root, text='Choose person in video', cursor='hand2', command=open_face_picker)
-    person_button.place(relx=0.6, rely=0.515, relwidth=0.3, relheight=0.065)
+    ctk.CTkLabel(root, text='Existing frames FPS:').place(relx=0.1, rely=0.56)
+    frames_fps_entry = ctk.CTkEntry(root, width=80)
+    frames_fps_entry.insert(0, str(modules.globals.frames_fps))
+    frames_fps_entry.place(relx=0.65, rely=0.555)
 
-    keep_fps_value = ctk.BooleanVar(value=modules.globals.keep_fps)
-    keep_fps_checkbox = ctk.CTkSwitch(root, text='Keep fps', variable=keep_fps_value, cursor='hand2', command=lambda: setattr(modules.globals, 'keep_fps', not modules.globals.keep_fps))
-    keep_fps_checkbox.place(relx=0.1, rely=0.6)
+    keep_fps_value = ctk.BooleanVar(value=bool(modules.globals.keep_fps))
+    ctk.CTkSwitch(
+        root, text='Keep fps', variable=keep_fps_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'keep_fps', bool(keep_fps_value.get()))
+    ).place(relx=0.1, rely=0.615)
 
-    keep_frames_value = ctk.BooleanVar(value=modules.globals.keep_frames)
-    keep_frames_switch = ctk.CTkSwitch(root, text='Keep frames', variable=keep_frames_value, cursor='hand2', command=lambda: setattr(modules.globals, 'keep_frames', keep_frames_value.get()))
-    keep_frames_switch.place(relx=0.1, rely=0.65)
+    keep_audio_value = ctk.BooleanVar(value=bool(modules.globals.keep_audio))
+    ctk.CTkSwitch(
+        root, text='Keep audio', variable=keep_audio_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'keep_audio', bool(keep_audio_value.get()))
+    ).place(relx=0.6, rely=0.615)
 
-    # for FRAME PROCESSOR ENHANCER tumbler:
-    enhancer_value = ctk.BooleanVar(value=modules.globals.fp_ui['face_enhancer'])
-    enhancer_switch = ctk.CTkSwitch(root, text='Face Enhancer', variable=enhancer_value, cursor='hand2', command=lambda: update_tumbler('face_enhancer',enhancer_value.get()))
-    enhancer_switch.place(relx=0.1, rely=0.7)
+    keep_frames_value = ctk.BooleanVar(value=bool(modules.globals.keep_frames))
+    ctk.CTkSwitch(
+        root, text='Keep frames', variable=keep_frames_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'keep_frames', bool(keep_frames_value.get()))
+    ).place(relx=0.1, rely=0.655)
 
-    keep_audio_value = ctk.BooleanVar(value=modules.globals.keep_audio)
-    keep_audio_switch = ctk.CTkSwitch(root, text='Keep audio', variable=keep_audio_value, cursor='hand2', command=lambda: setattr(modules.globals, 'keep_audio', keep_audio_value.get()))
-    keep_audio_switch.place(relx=0.6, rely=0.6)
+    many_faces_value = ctk.BooleanVar(value=bool(modules.globals.many_faces))
+    many_faces_switch = ctk.CTkSwitch(
+        root, text='Many faces', variable=many_faces_value, cursor='hand2',
+        command=lambda: set_many_faces(bool(many_faces_value.get()))
+    )
+    many_faces_switch.place(relx=0.6, rely=0.655)
 
-    many_faces_value = ctk.BooleanVar(value=modules.globals.many_faces)
-    many_faces_switch = ctk.CTkSwitch(root, text='Many faces', variable=many_faces_value, cursor='hand2', command=lambda: set_many_faces(many_faces_value.get()))
-    many_faces_switch.place(relx=0.6, rely=0.65)
+    enhancer_value = ctk.BooleanVar(value=bool(modules.globals.fp_ui.get('face_enhancer', False)))
+    ctk.CTkSwitch(
+        root, text='Face Enhancer', variable=enhancer_value, cursor='hand2',
+        command=lambda: update_tumbler('face_enhancer', bool(enhancer_value.get()))
+    ).place(relx=0.1, rely=0.695)
 
-    nsfw_value = ctk.BooleanVar(value=modules.globals.nsfw)
-    nsfw_switch = ctk.CTkSwitch(root, text='NSFW', variable=nsfw_value, cursor='hand2', command=lambda: setattr(modules.globals, 'nsfw', nsfw_value.get()))
-    nsfw_switch.place(relx=0.6, rely=0.7)
+    nsfw_value = ctk.BooleanVar(value=bool(modules.globals.nsfw))
+    ctk.CTkSwitch(
+        root, text='NSFW', variable=nsfw_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'nsfw', bool(nsfw_value.get()))
+    ).place(relx=0.6, rely=0.695)
 
-    mode_label = ctk.CTkLabel(root, text='Enhancer method:')
-    mode_label.place(relx=0.1, rely=0.745)
+    ctk.CTkLabel(root, text='Enhancer method:').place(relx=0.1, rely=0.74)
     mode_menu = ctk.CTkOptionMenu(
         root, values=['GFPGAN', 'Sharpen only'],
         command=lambda value: setattr(modules.globals, 'enhancer_mode', value)
     )
     mode_menu.set(modules.globals.enhancer_mode)
-    mode_menu.place(relx=0.54, rely=0.745, relwidth=0.36)
+    mode_menu.place(relx=0.54, rely=0.74, relwidth=0.36)
 
     strength_label = ctk.CTkLabel(root, text=f'Strength: {modules.globals.enhancer_strength}%')
     strength_label.place(relx=0.1, rely=0.795)
@@ -114,30 +153,29 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         command=lambda value: set_enhancer_strength(value, strength_label)
     )
     strength_slider.set(modules.globals.enhancer_strength)
-    strength_slider.place(relx=0.45, rely=0.80, relwidth=0.45)
+    strength_slider.place(relx=0.45, rely=0.795, relwidth=0.45)
 
-    compare_button = ctk.CTkButton(
+    ctk.CTkButton(
         root, text='Compare enhancer (1 frame)', command=compare_enhancer
-    )
-    compare_button.place(relx=0.28, rely=0.84, relwidth=0.44, relheight=0.045)
+    ).place(relx=0.28, rely=0.835, relwidth=0.44, relheight=0.04)
 
-    start_button = ctk.CTkButton(root, text='Start', cursor='hand2', command=lambda: select_output_path(start))
-    start_button.place(relx=0.15, rely=0.885, relwidth=0.2, relheight=0.045)
+    ctk.CTkButton(
+        root, text='Start', cursor='hand2', command=lambda: select_output_path(start)
+    ).place(relx=0.15, rely=0.89, relwidth=0.2, relheight=0.044)
+    ctk.CTkButton(
+        root, text='Destroy', cursor='hand2', command=destroy
+    ).place(relx=0.4, rely=0.89, relwidth=0.2, relheight=0.044)
+    ctk.CTkButton(
+        root, text='Preview', cursor='hand2', command=toggle_preview
+    ).place(relx=0.65, rely=0.89, relwidth=0.2, relheight=0.044)
 
-    stop_button = ctk.CTkButton(root, text='Destroy', cursor='hand2', command=lambda: destroy())
-    stop_button.place(relx=0.4, rely=0.885, relwidth=0.2, relheight=0.045)
-
-    preview_button = ctk.CTkButton(root, text='Preview', cursor='hand2', command=lambda: toggle_preview())
-    preview_button.place(relx=0.65, rely=0.885, relwidth=0.2, relheight=0.045)
-
-    status_label = ctk.CTkLabel(root, text=None, justify='center')
-    status_label.place(relx=0.1, rely=0.935, relwidth=0.8)
+    status_label = ctk.CTkLabel(root, text='', justify='center')
+    status_label.place(relx=0.1, rely=0.94, relwidth=0.8)
 
     donate_label = ctk.CTkLabel(root, text='Gourieff GitHub', justify='center', cursor='hand2')
-    donate_label.place(relx=0.1, rely=0.967, relwidth=0.8)
+    donate_label.place(relx=0.1, rely=0.975, relwidth=0.8)
     donate_label.configure(text_color=ctk.ThemeManager.theme.get('URL').get('text_color'))
     donate_label.bind('<Button>', lambda event: webbrowser.open('https://github.com/Gourieff'))
-
     return root
 
 
