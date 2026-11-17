@@ -136,68 +136,154 @@ def _two_point_alignment(points: np.ndarray, side: str) -> np.ndarray:
     return np.column_stack((rotation_scale, offset)).astype(np.float32)
 
 
-def estimate_alignment_matrix(landmarks: np.ndarray, mode: str = 'auto') -> tuple:
-    """Return (similarity transform, mode used) for XSeg's aligned crop.
+def _three_point_alignment(points: np.ndarray) -> np.ndarray:
+    """Fit upper face, refusing poor correspondence to the reference template."""
+    if not _upper_face_is_valid(points[:3]):
+        raise ValueError('Eye/nose landmarks are missing or unreliable')
+    matrix, _ = cv2.estimateAffinePartial2D(
+        points[:3], LANDMARK_TEMPLATE_3, method=cv2.LMEDS
+    )
+    if matrix is None or not np.isfinite(matrix).all():
+        raise ValueError('Could not align the visible upper face')
+    projected = cv2.transform(points[:3][None, :, :], matrix)[0]
+    if float(np.max(np.linalg.norm(projected - LANDMARK_TEMPLATE_3, axis=1))) > 18.0:
+        raise ValueError('Upper face landmarks cannot be aligned reliably')
+    return matrix
 
-    Two-point modes explicitly use one eye and the same-side mouth corner.
-    Auto prefers 5 / 3 landmarks; it falls back to 2 only when exactly two
-    labelled points remain valid. Detector landmarks do NOT indicate
-    visibility or confidence, so auto cannot infer a real side-on profile.
+
+def _fixed_alignment(points: np.ndarray, mode: str, strict_auto: bool = False) -> np.ndarray:
+    """Produce a candidate without switching to another mode.
+
+    Manual modes keep their previous semantics. Auto additionally rejects a
+    five-point fit with inconsistent mouth geometry or large reprojection error.
+    """
+    if mode in ('2-point-left', '2-point-right'):
+        return _two_point_alignment(points, mode.rsplit('-', 1)[1])
+    if mode == '3-point':
+        return _three_point_alignment(points)
+    if mode != '5-point':
+        raise ValueError(f'Invalid fixed alignment mode: {mode}')
+    if points.shape != (5, 2) or not np.isfinite(points).all():
+        raise ValueError('5-point mode requires all five valid facial landmarks')
+    upper_matrix = _three_point_alignment(points)
+    if strict_auto and not _mouth_geometry_reliable(points, upper_matrix):
+        raise ValueError('Mouth landmarks inconsistent with upper-face alignment')
+    matrix, _ = cv2.estimateAffinePartial2D(
+        points, LANDMARK_TEMPLATE, method=cv2.LMEDS
+    )
+    if matrix is None or not np.isfinite(matrix).all():
+        raise ValueError('Could not align the five facial landmarks')
+    if strict_auto:
+        projected = cv2.transform(points[None, :, :], matrix)[0]
+        error = np.linalg.norm(projected - LANDMARK_TEMPLATE, axis=1)
+        if float(np.max(error)) > 30.0 or float(np.mean(error)) > 15.0:
+            raise ValueError('Five-point fit has excessive reprojection error')
+    return matrix
+
+
+def alignment_quality_score(points: np.ndarray, matrix: np.ndarray, mode: str) -> float:
+    """Rank *plausible* alignments; smaller is preferable.
+
+    The score penalizes using fewer points and compares the *unused* landmarks
+    for competing two-point fits. Two points always fit their own pair exactly,
+    so their fit residual alone is NOT a useful confidence measure. The score
+    is a geometric heuristic, not a face visibility/confidence prediction.
+    """
+    if mode == '5-point':
+        indices = (0, 1, 2, 3, 4)
+        tier_penalty = 0.0
+    elif mode == '3-point':
+        indices = (0, 1, 2)
+        tier_penalty = 16.0
+    elif mode == '2-point-left':
+        indices = (0, 3)
+        tier_penalty = 40.0
+    elif mode == '2-point-right':
+        indices = (1, 4)
+        tier_penalty = 40.0
+    else:
+        raise ValueError(f'Invalid alignment mode for scoring: {mode}')
+
+    projected = cv2.transform(points[list(indices)][None, :, :], matrix)[0]
+    fit_error = float(np.mean(
+        np.linalg.norm(projected - LANDMARK_TEMPLATE[list(indices)], axis=1)
+    ))
+    score = tier_penalty + fit_error
+
+    if mode.startswith('2-point'):
+        # Other points are potentially occluded or hallucinated, so give them
+        # weak, clipped influence. This can help distinguish left vs right
+        # without allowing unreliable landmarks to veto a working pair.
+        held_out = [i for i in range(points.shape[0])
+                    if i not in indices and np.isfinite(points[i]).all()]
+        if held_out:
+            predicted = cv2.transform(points[held_out][None, :, :], matrix)[0]
+            distances = np.linalg.norm(
+                predicted - LANDMARK_TEMPLATE[held_out], axis=1
+            )
+            score += float(np.mean(np.minimum(distances, 96.0))) / 8.0
+        # Prefer less distorted crops when held-out landmarks cannot decide.
+        scale = float(np.hypot(matrix[0, 0], matrix[1, 0]))
+        angle = abs(float(np.degrees(np.arctan2(matrix[1, 0], matrix[0, 0]))))
+        score += min(8.0, 2.5 * abs(float(np.log(scale))))
+        score += min(8.0, max(0.0, angle - 20.0) / 8.0)
+    return score
+
+
+_AUTO_LOG_LOCK = threading.Lock()
+_AUTO_LOG_COUNTS = {}
+
+
+def _log_auto_fallback(mode: str, score: float) -> None:
+    if mode == '5-point':
+        return
+    with _AUTO_LOG_LOCK:
+        count = _AUTO_LOG_COUNTS.get(mode, 0) + 1
+        _AUTO_LOG_COUNTS[mode] = count
+    if count <= 5 or count % 100 == 0:
+        print(
+            f'[REACTOR.OCCLUSION] Auto chose {mode} '
+            f'(geometry score {score:.1f}, occurrence {count})',
+            flush=True
+        )
+
+
+def estimate_alignment_matrix(landmarks: np.ndarray, mode: str = 'auto') -> tuple:
+    """Return (2D similarity transform, selected mode) for XSeg.
+
+    Auto evaluates 5-point, 3-point, 2-point-left, 2-point-right and
+    selects the best geometrically plausible candidate by score.
+    It may still make a poor choice for extreme profiles: InsightFace's
+    coordinates do not expose landmark-visibility confidence.
     """
     if mode not in LANDMARK_MODES:
         raise ValueError(f'Invalid occlusion landmark mode: {mode}')
     points = np.asarray(landmarks, dtype=np.float32)
     if points.shape not in ((3, 2), (5, 2)):
         raise ValueError('Expected three or five labelled facial landmark slots')
+    if mode != 'auto':
+        return _fixed_alignment(points, mode), mode
 
-    if mode in ('2-point-left', '2-point-right'):
-        side = mode.rsplit('-', 1)[1]
-        return _two_point_alignment(points, side), mode
+    candidates = []
+    reasons = []
+    for candidate_mode in ('5-point', '3-point', '2-point-left', '2-point-right'):
+        try:
+            matrix = _fixed_alignment(
+                points, candidate_mode, strict_auto=True
+            )
+            score = alignment_quality_score(points, matrix, candidate_mode)
+            if not np.isfinite(score):
+                raise ValueError('Non-finite alignment score')
+            candidates.append((score, candidate_mode, matrix))
+        except (ValueError, cv2.error, np.linalg.LinAlgError) as error:
+            reasons.append(f'{candidate_mode}: {error}')
 
-    if mode == '5-point' and (points.shape != (5, 2) or
-                               not np.isfinite(points).all()):
-        raise ValueError('5-point mode requires all five valid facial landmarks')
+    if not candidates:
+        raise ValueError('No reliable XSeg alignment: ' + '; '.join(reasons))
+    score, selected, matrix = min(candidates, key=lambda result: result[0])
+    _log_auto_fallback(selected, score)
+    return matrix, selected
 
-    if not _upper_face_is_valid(points[:3]):
-        # Missing landmarks can be represented as NaN in synthetic or
-        # externally supplied data. Do not guess their identity from a
-        # bare pair of coordinates or from geometrically strange detections.
-        if mode == 'auto' and points.shape == (5, 2):
-            valid = np.isfinite(points).all(axis=1)
-            if int(valid.sum()) == 2:
-                for side, indices in (('left', (0, 3)), ('right', (1, 4))):
-                    if all(valid[index] for index in indices):
-                        return _two_point_alignment(points, side), '2-point-' + side
-        raise ValueError('Eye/nose landmarks are missing or unreliable')
-
-    upper_matrix, _ = cv2.estimateAffinePartial2D(
-        points[:3], LANDMARK_TEMPLATE_3, method=cv2.LMEDS
-    )
-    if upper_matrix is None or not np.isfinite(upper_matrix).all():
-        raise ValueError('Could not align the visible upper face')
-
-    projected = cv2.transform(points[:3][None, :, :], upper_matrix)[0]
-    residuals = np.linalg.norm(projected - LANDMARK_TEMPLATE_3, axis=1)
-    if float(np.max(residuals)) > 18.0:
-        raise ValueError('Upper face landmarks cannot be aligned reliably')
-    if mode == '3-point':
-        return upper_matrix, '3-point'
-
-    use_five = (points.shape == (5, 2) and
-                np.isfinite(points).all() and
-                (mode == '5-point' or
-                 _mouth_geometry_reliable(points, upper_matrix)))
-    if not use_five:
-        return upper_matrix, '3-point'
-
-    matrix, _ = cv2.estimateAffinePartial2D(
-        points, LANDMARK_TEMPLATE, method=cv2.LMEDS
-    )
-    if matrix is None or not np.isfinite(matrix).all():
-        if mode == 'auto':
-            return upper_matrix, '3-point'
-        raise ValueError('Could not align the five facial landmarks')
-    return matrix, '5-point'
 
 
 def get_visibility_mask(frame: np.ndarray, face: Any, mode: str = None) -> np.ndarray:
