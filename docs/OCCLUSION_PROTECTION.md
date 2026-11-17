@@ -34,12 +34,14 @@ to align the image before ONNX inference.
 
 A **Landmarks** selector is shown beside the XSeg switch:
 
-- **Auto (default)**: first verify the two eyes and nose, then check
-  that the two mouth points have plausible geometry in the aligned crop.
-  If they do, align with all five points. Otherwise align using **only
-  the eyes and nose**. If these three cannot be used, Auto tries two points
-  **only when exactly one labelled eye+same-side mouth pair is still finite**;
-  it does not infer which points are actually visible in a side profile.
+- **Auto (default, with fallback)**: tries **5-point**, **3-point**,
+  **2-point L** and **2-point R** independently for each face. If an upper-face
+  fit fails (e.g. `Upper face landmarks cannot be aligned reliably`), both
+  two-point modes are still considered, **even when InsightFace reports five
+  finite landmark coordinates**. Auto compares valid candidates with a
+  conservative geometry score that prefers consistent multi-point alignments,
+  then uses the lower-scoring of the two profile-side candidates. In the
+  console, the first few fallbacks show the chosen mode and score.
 - **2-point L (experimental)**: use only the image-left eye **centre** and
   the image-left mouth corner from InsightFace's labelled five-point slots.
 - **2-point R (experimental)**: use only the image-right eye centre and
@@ -55,6 +57,14 @@ A **Landmarks** selector is shown beside the XSeg switch:
 On the command line, add `--occlusion-protection
 --occlusion-landmarks 2-point-left` (or `2-point-right`, `3-point`,
 `auto`, `5-point`).
+
+**The Auto score is a heuristic, not a calibrated confidence.**
+A two-point pair fits itself exactly, so its reprojection error alone
+cannot identify the true visible side. Auto also considers other available
+landmarks (with capped influence), rotation/scale plausibility and a penalty
+for using fewer points. The result may still be wrong when the detector
+hallucinates plausible landmark positions. If Auto picks a poor side on
+profile footage, you can force `2-point L` or `2-point R`.
 
 **Two points determine a 2D similarity transform, not the 3D head pose.**
 Our five-landmark detector reports eye **centres**, nose and mouth corners,
