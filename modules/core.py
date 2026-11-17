@@ -174,6 +174,18 @@ def pre_check() -> bool:
     if not shutil.which('ffmpeg'):
         update_status('ffmpeg is not installed.')
         return False
+    if modules.globals.offline_models:
+        from modules.model_assets import local_models_missing
+        missing = local_models_missing(
+            use_xseg=bool(modules.globals.occlusion_protection),
+            use_enhancer=bool(modules.globals.fp_ui.get('face_enhancer', False))
+        )
+        if missing:
+            update_status(
+                'Offline mode: install missing local model files before starting:\\n'
+                + '\\n'.join(missing)
+            )
+            return False
     return True
 
 
