@@ -37,7 +37,15 @@ A **Landmarks** selector is shown beside the XSeg switch:
 - **Auto (default)**: first verify the two eyes and nose, then check
   that the two mouth points have plausible geometry in the aligned crop.
   If they do, align with all five points. Otherwise align using **only
-  the eyes and nose**.
+  the eyes and nose**. If these three cannot be used, Auto tries two points
+  **only when exactly one labelled eye+same-side mouth pair is still finite**;
+  it does not infer which points are actually visible in a side profile.
+- **2-point L (experimental)**: use only the image-left eye **centre** and
+  the image-left mouth corner from InsightFace's labelled five-point slots.
+- **2-point R (experimental)**: use only the image-right eye centre and
+  image-right mouth corner. This can be tried on the other profile direction.
+  Neither option knows which physical side of the face is visible.
+  Select the side corresponding to the two reliable detected landmarks.
 - **3-point**: always align from left eye, right eye and nose.
   Mouth landmarks are ignored, even if present. Particularly useful
   for testing a karaoke microphone in front of the mouth.
@@ -45,7 +53,19 @@ A **Landmarks** selector is shown beside the XSeg switch:
   did. Requires all five finite points.
 
 On the command line, add `--occlusion-protection
---occlusion-landmarks 3-point` (or `auto` / `5-point`).
+--occlusion-landmarks 2-point-left` (or `2-point-right`, `3-point`,
+`auto`, `5-point`).
+
+**Two points determine a 2D similarity transform, not the 3D head pose.**
+Our five-landmark detector reports eye **centres**, nose and mouth corners,
+not arbitrary points such as the lower corner of an eye. The selected pair
+must be labelled consistently with the reference template. Real profile
+faces can still be undetected or have plausible but incorrect predicted
+landmarks, even when all five coordinate pairs are finite. Since the XSeg-1
+model expects a frontal-ish aligned crop, its segmentation on a side profile
+may be inaccurate. On invalid or degenerate alignment, the existing swapper
+keeps the original frame. Compare both explicit sides on a short video
+instead of relying on Auto for this case.
 
 **Limits:** Geometry alone cannot reveal an occluded mouth if a detector
 guesses convincing mouth positions. Auto is a heuristic, not an occlusion
@@ -89,20 +109,20 @@ to reuse frames produced under incompatible settings.
 
 ## Update
 
-This work is on `feature/occlusion-protection` and is NOT merged to main.
+The code is in the fork's `main` branch. Experimental two-point support is
+introduced via pull request and should be tested locally before wider use.
 After closing the ReActor process:
 
 ```powershell
 cd C:\Users\Casa\ReActor-Custom
 git status --short
 git fetch origin
-git switch --track origin/feature/occlusion-protection
+git switch main
+git pull --ff-only origin main
 C:\Users\Casa\ReActor-UI\.venv\Scripts\python.exe run.py --execution-provider cpu --execution-threads 2 --max-memory 6 --video-quality 10 --keep-fps
 ```
 
-If the branch exists locally, use `git switch feature/occlusion-protection`
-and then `git pull --ff-only`. Preserve any local modifications before
-switching branches.
+Preserve any local modifications before switching branches.
 
 **Validation:** automated unit tests use synthetic masks and do not
 require real video or an installed XSeg model. A local Windows end-to-end

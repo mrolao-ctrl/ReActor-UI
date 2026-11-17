@@ -152,15 +152,17 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         relx=0.55, rely=0.738, relwidth=0.14
     )
     landmark_mode_menu = ctk.CTkOptionMenu(
-        root, values=['Auto', '3-point', '5-point'],
+        root, values=['Auto', '2-point L', '2-point R', '3-point', '5-point'],
         command=lambda value: setattr(
-            modules.globals, 'occlusion_landmark_mode', value.lower()
+            modules.globals, 'occlusion_landmark_mode',
+            {'2-point L': '2-point-left', '2-point R': '2-point-right'}.get(value, value.lower())
         )
     )
-    landmark_mode_menu.set(
-        'Auto' if modules.globals.occlusion_landmark_mode == 'auto'
-        else modules.globals.occlusion_landmark_mode
-    )
+    landmark_mode_menu.set({
+        'auto': 'Auto', '2-point-left': '2-point L',
+        '2-point-right': '2-point R'
+    }.get(modules.globals.occlusion_landmark_mode,
+          modules.globals.occlusion_landmark_mode))
     landmark_mode_menu.place(relx=0.70, rely=0.738, relwidth=0.20)
 
     ctk.CTkLabel(root, text='Enhancer method:').place(relx=0.1, rely=0.776)
