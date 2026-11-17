@@ -10,6 +10,9 @@ from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import select_matching_face
 from modules.multi_face import prepare_assignments, swap_assigned_faces
+from modules.face_occlusion import (
+    combine_visibility, get_visibility_mask, get_occluder_session, warn_once
+)
 from modules.frame_io import read_image, write_frame, UnreadableFrameError
 from modules.typing import Face, Frame
 from modules.utilities import conditional_download, resolve_relative_path, is_image, is_video
@@ -26,6 +29,15 @@ def pre_check() -> bool:
 
 
 def pre_start() -> bool:
+    if modules.globals.occlusion_protection:
+        try:
+            get_occluder_session()
+        except (RuntimeError, OSError, ValueError, ImportError) as error:
+            update_status(
+                f'Occlusion Protection could not load the XSeg model: {error}',
+                NAME
+            )
+            return False
     if modules.globals.face_assignments:
         try:
             prepare_multi_assignments()
@@ -74,7 +86,24 @@ def get_face_swapper() -> Any:
 
 
 def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
-    return get_face_swapper().get(temp_frame, target_face, source_face, paste_back=True)
+    if not modules.globals.occlusion_protection:
+        # Preserve the original fast path, byte-for-byte in behaviour.
+        return get_face_swapper().get(
+            temp_frame, target_face, source_face, paste_back=True
+        )
+
+    # Estimate occlusion using the ORIGINAL, unmodified face, then restore
+    # the foreground only after the full swap has been generated.
+    try:
+        visible = get_visibility_mask(temp_frame, target_face)
+    except (RuntimeError, OSError, ValueError, cv2.error) as error:
+        warn_once(f'Could not analyse occlusion; keeping original face: {error}')
+        return temp_frame
+
+    swapped = get_face_swapper().get(
+        temp_frame, target_face, source_face, paste_back=True
+    )
+    return combine_visibility(temp_frame, swapped, visible)
 
 
 def process_frame(source_face: Face, temp_frame: Frame, frame_path=None,
