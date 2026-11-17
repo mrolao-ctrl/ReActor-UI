@@ -48,7 +48,7 @@ def parse_args() -> None:
     program.add_argument('--video-quality', help='adjust output video quality', dest='video_quality', type=int, default=18, choices=range(52), metavar='[0-51]')
     program.add_argument('--enhancer-strength', help='GFPGAN blend strength 0..100', dest='enhancer_strength', type=int, default=40, choices=range(101))
     program.add_argument('--enhancer-mode', help='face restoration method', dest='enhancer_mode', choices=['gfpgan', 'sharpen'], default='gfpgan')
-    program.add_argument('--occlusion-protection', help='preserve foreground occluders using optional XSeg model', action='store_true', default=False)
+    program.add_argument('--occlusion-protection', help='preserve foreground occluders using optional XSeg model', action='store_true', default=True)
     program.add_argument('--occlusion-landmarks', help='alignment for XSeg (auto, three or five facial points)', choices=['auto', '3-point', '5-point'], default='auto')
     program.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=suggest_max_memory())
     program.add_argument('--execution-provider', help='execution provider', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
