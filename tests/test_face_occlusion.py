@@ -144,6 +144,79 @@ class OcclusionTests(unittest.TestCase):
         self.assertEqual(0.0, float(mask[185, 130]))
         self.assertGreater(float(mask[110, 130]), 0.95)
 
+    def test_two_point_left_eye_and_mouth_can_align_profile(self):
+        points = LANDMARK_TEMPLATE.copy()
+        points[[1, 2, 4]] = np.nan  # Only image-left eye and mouth available.
+        matrix, used = estimate_alignment_matrix(points, '2-point-left')
+        self.assertEqual('2-point-left', used)
+        np.testing.assert_allclose(
+            cv2.transform(points[[0, 3]][None, :, :], matrix)[0],
+            LANDMARK_TEMPLATE[[0, 3]], atol=0.01
+        )
+
+    def test_two_point_right_aligns_rotated_and_scaled_face(self):
+        points = LANDMARK_TEMPLATE.copy()
+        angle = np.radians(17)
+        rotation = np.array([
+            [np.cos(angle), -np.sin(angle)],
+            [np.sin(angle), np.cos(angle)]
+        ], dtype=np.float32)
+        points = (points @ rotation.T) * 0.72 + [35, 15]
+        points[[0, 2, 3]] = np.nan
+        matrix, used = estimate_alignment_matrix(points, '2-point-right')
+        self.assertEqual('2-point-right', used)
+        np.testing.assert_allclose(
+            cv2.transform(points[[1, 4]][None, :, :].astype(np.float32), matrix)[0],
+            LANDMARK_TEMPLATE[[1, 4]], atol=0.02
+        )
+
+    def test_auto_uses_two_point_when_exactly_labelled_pair_survives(self):
+        for side, keep in [('left', (0, 3)), ('right', (1, 4))]:
+            with self.subTest(side=side):
+                points = np.full((5, 2), np.nan, dtype=np.float32)
+                points[list(keep)] = LANDMARK_TEMPLATE[list(keep)]
+                _, used = estimate_alignment_matrix(points, 'auto')
+                self.assertEqual('2-point-' + side, used)
+
+    def test_auto_does_not_guess_two_point_when_all_five_are_finite(self):
+        matrix, used = estimate_alignment_matrix(
+            LANDMARK_TEMPLATE, 'auto'
+        )
+        self.assertEqual('5-point', used)
+        self.assertEqual((2, 3), matrix.shape)
+
+    def test_two_point_rejects_wrong_side_or_missing_pair(self):
+        points = np.full((5, 2), np.nan, dtype=np.float32)
+        points[[0, 3]] = LANDMARK_TEMPLATE[[0, 3]]
+        with self.assertRaisesRegex(ValueError, 'right eye/mouth'):
+            estimate_alignment_matrix(points, '2-point-right')
+
+    def test_two_point_rejects_unlabelled_pair(self):
+        with self.assertRaisesRegex(ValueError, 'labelled landmark'):
+            estimate_alignment_matrix(LANDMARK_TEMPLATE[[0, 3]], '2-point-left')
+
+    def test_two_point_rejects_collapsed_pair(self):
+        points = LANDMARK_TEMPLATE.copy()
+        points[3] = points[0]
+        with self.assertRaisesRegex(ValueError, 'too close'):
+            estimate_alignment_matrix(points, '2-point-left')
+
+    def test_two_point_xseg_output_still_preserves_foreground(self):
+        frame = np.zeros((256, 256, 3), dtype=np.uint8)
+        prediction = np.ones((256, 256), dtype=np.float32)
+        prediction[155:230, 95:165] = 0
+        session = DummySession(prediction)
+        points = np.full((5, 2), np.nan, dtype=np.float32)
+        points[[0, 3]] = LANDMARK_TEMPLATE[[0, 3]]
+        with patch('modules.face_occlusion.get_occluder_session', return_value=session):
+            mask = get_visibility_mask(
+                frame, DummyFace([10, 10, 230, 230], kps=points),
+                mode='2-point-left'
+            )
+        self.assertEqual((256, 256), mask.shape)
+        self.assertLess(float(mask[180, 130]), 0.05)
+        self.assertGreater(float(mask[110, 130]), 0.95)
+
     def test_box_matching_finds_selected_person(self):
         person_a = DummyFace([10, 10, 30, 30])
         person_b = DummyFace([70, 70, 95, 95])
