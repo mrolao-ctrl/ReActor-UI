@@ -5,10 +5,12 @@ an output-specific .frames folder and are reused on restart. Frame recovery
 uses only neighbouring input PNGs, with no attempt to access original media.
 """
 import bisect
+from collections import Counter
 import hashlib
 import json
 import os
 from pathlib import Path
+from PIL import Image
 import subprocess
 
 from tqdm import tqdm
@@ -35,12 +37,21 @@ def input_sequence(folder: str) -> tuple:
     # FFmpeg still receives a complete 1..N sequence.
     count = max(names)
     valid = {}
+    dimensions = {}
     for number, path in tqdm(sorted(names.items()), desc='Checking input PNGs',
                              unit='frame'):
         if png_is_readable(str(path)):
             valid[number] = str(path)
+            with Image.open(path) as image:
+                dimensions[number] = image.size
     if not valid:
         raise RuntimeError('All input frames are missing or corrupt')
+    standard_size = Counter(dimensions.values()).most_common(1)[0][0]
+    for number in list(valid):
+        if dimensions[number] != standard_size:
+            print(f'[FRAMES] Wrong dimensions in {number:04d}.png; '
+                  'recovering from neighboring frames.', flush=True)
+            del valid[number]
     good = sorted(valid)
     resolved = []
     repairs = []
@@ -194,7 +205,10 @@ def run_existing_frames(
     )
     sources = modules.globals.face_assignments or [{
         'source_path': modules.globals.source_path,
-        'embedding': [],
+        'embedding': (
+            modules.globals.target_face_embedding.tolist()
+            if modules.globals.target_face_embedding is not None else []
+        ),
     }]
     fingerprint = job_fingerprint(frames_folder, output_path, sources, fps,
                                   enhancer_enabled, len(input_paths))
