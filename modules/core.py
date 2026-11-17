@@ -225,6 +225,7 @@ def start() -> None:
     # process image to image
     if has_image_extension(modules.globals.target_path):
         if modules.globals.nsfw == False:
+            update_status('Checking image content before processing...')
             from modules.predicter import predict_image
             if predict_image(modules.globals.target_path):
                 report_content_rejection('image')
@@ -241,6 +242,7 @@ def start() -> None:
         return
     # process image to videos
     if modules.globals.nsfw == False:
+        update_status('Checking video content; face swap has not started...')
         from modules.predicter import predict_video
         if predict_video(modules.globals.target_path):
             report_content_rejection('video')
