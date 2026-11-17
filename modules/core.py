@@ -180,6 +180,9 @@ def update_status(message: str, scope: str = 'REACTOR.CORE') -> None:
 def start() -> None:
     # Direct PNG mode never extracts frames or reads an original video.
     if modules.globals.frames_directory:
+        modules.globals.frame_target_boxes.clear()
+        modules.globals.preview_face_boxes = []
+        modules.globals.frame_recovery_log.clear()
         if not modules.globals.output_path:
             raise RuntimeError('Select an output MP4 file for existing frames mode')
         from modules.processors.frame import face_swapper
