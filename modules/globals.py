@@ -21,6 +21,13 @@ many_faces = None
 # None means the original leftmost-face selection remains in effect.
 target_face_embedding = None
 
+# Optional multiple identity-to-source-image assignments made in the GUI.
+# Embeddings live only in RAM; they are not written into recovery reports.
+face_assignments = []
+# When set, work directly from a folder of PNGs and never open source video.
+frames_directory = None
+frames_fps = 30.0
+
 # Strength 0..100 blends GFPGAN with the unenhanced face-swap output.
 enhancer_strength = 40
 enhancer_mode = 'GFPGAN'  # or 'Sharpen only'

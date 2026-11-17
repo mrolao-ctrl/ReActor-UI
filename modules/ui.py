@@ -1,5 +1,6 @@
 import os
 import webbrowser
+from pathlib import Path
 import customtkinter as ctk
 from typing import Callable, Tuple
 import cv2
@@ -14,7 +15,7 @@ from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
 
 ROOT = None
-ROOT_HEIGHT = 810
+ROOT_HEIGHT = 950
 ROOT_WIDTH = 600
 
 PREVIEW = None
@@ -24,6 +25,9 @@ PREVIEW_MAX_WIDTH = 1200
 RECENT_DIRECTORY_SOURCE = None
 RECENT_DIRECTORY_TARGET = None
 RECENT_DIRECTORY_OUTPUT = None
+FRAMES_PREVIEW_PATHS = []
+assignments_label = None
+frames_fps_entry = None
 
 preview_label = None
 preview_slider = None
@@ -46,6 +50,7 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label, many_faces_switch
+    global assignments_label, frames_fps_entry
 
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode('system')
@@ -55,57 +60,91 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     root.minsize(ROOT_WIDTH, ROOT_HEIGHT)
     root.geometry(f'{ROOT_WIDTH}x{ROOT_HEIGHT}')
     root.title(f'{modules.metadata.name} {modules.metadata.version} {modules.metadata.edition}')
-    root.configure()
     root.protocol('WM_DELETE_WINDOW', lambda: destroy())
 
-    source_label = ctk.CTkLabel(root, text=None)
-    source_label.place(relx=0.1, rely=0.1, relwidth=0.3, relheight=0.25)
+    source_label = ctk.CTkLabel(root, text='Source face')
+    source_label.place(relx=0.1, rely=0.065, relwidth=0.3, relheight=0.23)
+    target_label = ctk.CTkLabel(root, text='Target video / frames')
+    target_label.place(relx=0.6, rely=0.065, relwidth=0.3, relheight=0.23)
 
-    target_label = ctk.CTkLabel(root, text=None)
-    target_label.place(relx=0.6, rely=0.1, relwidth=0.3, relheight=0.25)
+    ctk.CTkButton(root, text='Select a face', cursor='hand2',
+                  command=select_source_path).place(
+        relx=0.1, rely=0.31, relwidth=0.3, relheight=0.075
+    )
+    ctk.CTkButton(root, text='Select a target', cursor='hand2',
+                  command=select_target_path).place(
+        relx=0.6, rely=0.31, relwidth=0.3, relheight=0.075
+    )
 
-    source_button = ctk.CTkButton(root, text='Select a face', cursor='hand2', command=lambda: select_source_path())
-    source_button.place(relx=0.1, rely=0.4, relwidth=0.3, relheight=0.1)
+    ctk.CTkButton(root, text='Use existing PNG frames',
+                  command=select_frames_directory).place(
+        relx=0.1, rely=0.40, relwidth=0.35, relheight=0.05
+    )
+    ctk.CTkButton(root, text='Choose person (single)',
+                  command=open_face_picker).place(
+        relx=0.55, rely=0.40, relwidth=0.35, relheight=0.05
+    )
+    ctk.CTkButton(root, text='Clear person assignments',
+                  command=clear_assignments).place(
+        relx=0.1, rely=0.465, relwidth=0.35, relheight=0.05
+    )
+    ctk.CTkButton(root, text='Add person + source photo',
+                  command=lambda: open_face_picker(multiple=True)).place(
+        relx=0.55, rely=0.465, relwidth=0.35, relheight=0.05
+    )
 
-    target_button = ctk.CTkButton(root, text='Select a target', cursor='hand2', command=lambda: select_target_path())
-    target_button.place(relx=0.6, rely=0.4, relwidth=0.3, relheight=0.1)
+    assignments_label = ctk.CTkLabel(root, text='Mapped people: 0 (legacy single-face mode)')
+    assignments_label.place(relx=0.1, rely=0.525, relwidth=0.8)
 
-    person_button = ctk.CTkButton(root, text='Choose person in video', cursor='hand2', command=open_face_picker)
-    person_button.place(relx=0.6, rely=0.515, relwidth=0.3, relheight=0.065)
+    ctk.CTkLabel(root, text='Existing frames FPS:').place(relx=0.1, rely=0.56)
+    frames_fps_entry = ctk.CTkEntry(root, width=80)
+    frames_fps_entry.insert(0, str(modules.globals.frames_fps))
+    frames_fps_entry.place(relx=0.65, rely=0.555)
 
-    keep_fps_value = ctk.BooleanVar(value=modules.globals.keep_fps)
-    keep_fps_checkbox = ctk.CTkSwitch(root, text='Keep fps', variable=keep_fps_value, cursor='hand2', command=lambda: setattr(modules.globals, 'keep_fps', not modules.globals.keep_fps))
-    keep_fps_checkbox.place(relx=0.1, rely=0.6)
+    keep_fps_value = ctk.BooleanVar(value=bool(modules.globals.keep_fps))
+    ctk.CTkSwitch(
+        root, text='Keep fps', variable=keep_fps_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'keep_fps', bool(keep_fps_value.get()))
+    ).place(relx=0.1, rely=0.615)
 
-    keep_frames_value = ctk.BooleanVar(value=modules.globals.keep_frames)
-    keep_frames_switch = ctk.CTkSwitch(root, text='Keep frames', variable=keep_frames_value, cursor='hand2', command=lambda: setattr(modules.globals, 'keep_frames', keep_frames_value.get()))
-    keep_frames_switch.place(relx=0.1, rely=0.65)
+    keep_audio_value = ctk.BooleanVar(value=bool(modules.globals.keep_audio))
+    ctk.CTkSwitch(
+        root, text='Keep audio', variable=keep_audio_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'keep_audio', bool(keep_audio_value.get()))
+    ).place(relx=0.6, rely=0.615)
 
-    # for FRAME PROCESSOR ENHANCER tumbler:
-    enhancer_value = ctk.BooleanVar(value=modules.globals.fp_ui['face_enhancer'])
-    enhancer_switch = ctk.CTkSwitch(root, text='Face Enhancer', variable=enhancer_value, cursor='hand2', command=lambda: update_tumbler('face_enhancer',enhancer_value.get()))
-    enhancer_switch.place(relx=0.1, rely=0.7)
+    keep_frames_value = ctk.BooleanVar(value=bool(modules.globals.keep_frames))
+    ctk.CTkSwitch(
+        root, text='Keep frames', variable=keep_frames_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'keep_frames', bool(keep_frames_value.get()))
+    ).place(relx=0.1, rely=0.655)
 
-    keep_audio_value = ctk.BooleanVar(value=modules.globals.keep_audio)
-    keep_audio_switch = ctk.CTkSwitch(root, text='Keep audio', variable=keep_audio_value, cursor='hand2', command=lambda: setattr(modules.globals, 'keep_audio', keep_audio_value.get()))
-    keep_audio_switch.place(relx=0.6, rely=0.6)
+    many_faces_value = ctk.BooleanVar(value=bool(modules.globals.many_faces))
+    many_faces_switch = ctk.CTkSwitch(
+        root, text='Many faces', variable=many_faces_value, cursor='hand2',
+        command=lambda: set_many_faces(bool(many_faces_value.get()))
+    )
+    many_faces_switch.place(relx=0.6, rely=0.655)
 
-    many_faces_value = ctk.BooleanVar(value=modules.globals.many_faces)
-    many_faces_switch = ctk.CTkSwitch(root, text='Many faces', variable=many_faces_value, cursor='hand2', command=lambda: set_many_faces(many_faces_value.get()))
-    many_faces_switch.place(relx=0.6, rely=0.65)
+    enhancer_value = ctk.BooleanVar(value=bool(modules.globals.fp_ui.get('face_enhancer', False)))
+    ctk.CTkSwitch(
+        root, text='Face Enhancer', variable=enhancer_value, cursor='hand2',
+        command=lambda: update_tumbler('face_enhancer', bool(enhancer_value.get()))
+    ).place(relx=0.1, rely=0.695)
 
-    nsfw_value = ctk.BooleanVar(value=modules.globals.nsfw)
-    nsfw_switch = ctk.CTkSwitch(root, text='NSFW', variable=nsfw_value, cursor='hand2', command=lambda: setattr(modules.globals, 'nsfw', nsfw_value.get()))
-    nsfw_switch.place(relx=0.6, rely=0.7)
+    nsfw_value = ctk.BooleanVar(value=bool(modules.globals.nsfw))
+    ctk.CTkSwitch(
+        root, text='NSFW', variable=nsfw_value, cursor='hand2',
+        command=lambda: setattr(modules.globals, 'nsfw', bool(nsfw_value.get()))
+    ).place(relx=0.6, rely=0.695)
 
-    mode_label = ctk.CTkLabel(root, text='Enhancer method:')
-    mode_label.place(relx=0.1, rely=0.745)
+    ctk.CTkLabel(root, text='Enhancer method:').place(relx=0.1, rely=0.74)
     mode_menu = ctk.CTkOptionMenu(
         root, values=['GFPGAN', 'Sharpen only'],
         command=lambda value: setattr(modules.globals, 'enhancer_mode', value)
     )
     mode_menu.set(modules.globals.enhancer_mode)
-    mode_menu.place(relx=0.54, rely=0.745, relwidth=0.36)
+    mode_menu.place(relx=0.54, rely=0.74, relwidth=0.36)
 
     strength_label = ctk.CTkLabel(root, text=f'Strength: {modules.globals.enhancer_strength}%')
     strength_label.place(relx=0.1, rely=0.795)
@@ -114,30 +153,29 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         command=lambda value: set_enhancer_strength(value, strength_label)
     )
     strength_slider.set(modules.globals.enhancer_strength)
-    strength_slider.place(relx=0.45, rely=0.80, relwidth=0.45)
+    strength_slider.place(relx=0.45, rely=0.795, relwidth=0.45)
 
-    compare_button = ctk.CTkButton(
+    ctk.CTkButton(
         root, text='Compare enhancer (1 frame)', command=compare_enhancer
-    )
-    compare_button.place(relx=0.28, rely=0.84, relwidth=0.44, relheight=0.045)
+    ).place(relx=0.28, rely=0.835, relwidth=0.44, relheight=0.04)
 
-    start_button = ctk.CTkButton(root, text='Start', cursor='hand2', command=lambda: select_output_path(start))
-    start_button.place(relx=0.15, rely=0.885, relwidth=0.2, relheight=0.045)
+    ctk.CTkButton(
+        root, text='Start', cursor='hand2', command=lambda: select_output_path(start)
+    ).place(relx=0.15, rely=0.89, relwidth=0.2, relheight=0.044)
+    ctk.CTkButton(
+        root, text='Destroy', cursor='hand2', command=destroy
+    ).place(relx=0.4, rely=0.89, relwidth=0.2, relheight=0.044)
+    ctk.CTkButton(
+        root, text='Preview', cursor='hand2', command=toggle_preview
+    ).place(relx=0.65, rely=0.89, relwidth=0.2, relheight=0.044)
 
-    stop_button = ctk.CTkButton(root, text='Destroy', cursor='hand2', command=lambda: destroy())
-    stop_button.place(relx=0.4, rely=0.885, relwidth=0.2, relheight=0.045)
-
-    preview_button = ctk.CTkButton(root, text='Preview', cursor='hand2', command=lambda: toggle_preview())
-    preview_button.place(relx=0.65, rely=0.885, relwidth=0.2, relheight=0.045)
-
-    status_label = ctk.CTkLabel(root, text=None, justify='center')
-    status_label.place(relx=0.1, rely=0.935, relwidth=0.8)
+    status_label = ctk.CTkLabel(root, text='', justify='center')
+    status_label.place(relx=0.1, rely=0.94, relwidth=0.8)
 
     donate_label = ctk.CTkLabel(root, text='Gourieff GitHub', justify='center', cursor='hand2')
-    donate_label.place(relx=0.1, rely=0.967, relwidth=0.8)
+    donate_label.place(relx=0.1, rely=0.975, relwidth=0.8)
     donate_label.configure(text_color=ctk.ThemeManager.theme.get('URL').get('text_color'))
     donate_label.bind('<Button>', lambda event: webbrowser.open('https://github.com/Gourieff'))
-
     return root
 
 
@@ -176,20 +214,18 @@ def set_enhancer_strength(value: float, label: ctk.CTkLabel) -> None:
 
 def compare_enhancer() -> None:
     """Render the face swap and GFPGAN once, then compare blend levels locally."""
-    if not modules.globals.source_path or not modules.globals.target_path:
-        update_status('Select a source face and a target first.')
+    if (not modules.globals.source_path and not modules.globals.face_assignments) or preview_target_count() == 0:
+        update_status('Select a source face/mapping and a video or frames first.')
         return
 
     from modules.processors.frame import face_swapper, face_enhancer
     from modules.enhancement import blend_selected_faces
 
-    frame_number = 1
-    if is_video(modules.globals.target_path) and PREVIEW.state() == 'normal':
-        frame_number = max(1, int(round(preview_slider.get())) + 1)
-    if is_video(modules.globals.target_path):
-        frame = get_video_frame(modules.globals.target_path, frame_number)
-    else:
-        frame = cv2.imread(modules.globals.target_path)
+    frame_index = 0
+    if preview_target_count() > 1 and PREVIEW.state() == 'normal':
+        frame_index = max(0, int(round(preview_slider.get())))
+    frame = preview_target_frame(frame_index)
+    frame_number = frame_index + 1
     if frame is None:
         update_status('Cannot read comparison frame.')
         return
@@ -204,7 +240,11 @@ def compare_enhancer() -> None:
     comparison.update_idletasks()
 
     try:
-        face_swapper_source = face_swapper.load_source_face(modules.globals.source_path)
+        face_swapper_source = (
+            face_swapper.prepare_multi_assignments()
+            if modules.globals.face_assignments else
+            face_swapper.load_source_face(modules.globals.source_path)
+        )
         swapped = face_swapper.process_frame(face_swapper_source, frame)
         boxes = list(modules.globals.preview_face_boxes)
         if not boxes:
@@ -231,11 +271,90 @@ def compare_enhancer() -> None:
         ctk.CTkLabel(comparison, text=f'Comparison failed: {error}', wraplength=850).pack(pady=20)
 
 
+def update_assignments_label() -> None:
+    if assignments_label is not None:
+        count = len(modules.globals.face_assignments)
+        assignments_label.configure(
+            text=f'Mapped people: {count}' if count else
+            'Mapped people: 0 (legacy single-face mode)'
+        )
+
+
+def clear_assignments() -> None:
+    modules.globals.face_assignments.clear()
+    update_assignments_label()
+    update_status('All additional person assignments cleared.')
+
+
+def select_frames_directory() -> None:
+    """Use only local PNG files; do not require a corresponding video."""
+    global FRAMES_PREVIEW_PATHS
+    folder = ctk.filedialog.askdirectory(
+        title='Choose an existing numbered PNG frames folder',
+        initialdir=RECENT_DIRECTORY_TARGET
+    )
+    if not folder:
+        return
+    paths = sorted(
+        (p for p in Path(folder).glob('*.png')
+         if p.stem.isdigit() and int(p.stem) >= 1),
+        key=lambda p: int(p.stem)
+    )
+    if not paths:
+        update_status('This folder contains no numbered PNG frames.')
+        return
+    first = next((str(path) for path in paths if cv2.imread(str(path)) is not None), None)
+    if first is None:
+        update_status('No readable PNG found in selected folder.')
+        return
+    PREVIEW.withdraw()
+    FRAMES_PREVIEW_PATHS = [str(p) for p in paths]
+    modules.globals.frames_directory = folder
+    modules.globals.target_path = None
+    modules.globals.source_path = None
+    source_label.configure(image=None, text='Source face')
+    modules.globals.target_face_embedding = None
+    modules.globals.face_assignments.clear()
+    update_assignments_label()
+    image = render_image_preview(first, (200, 200))
+    target_label.configure(
+        image=image, text=f'{Path(folder).name} — {len(paths)} PNGs',
+        compound='top'
+    )
+    update_status(
+        'Existing frames selected. Choose each person + source image, '
+        'then Start. Output is silent MP4; input PNGs remain unchanged.'
+    )
+
+
+def preview_target_count() -> int:
+    if modules.globals.frames_directory:
+        return len(FRAMES_PREVIEW_PATHS)
+    if is_video(modules.globals.target_path):
+        return get_video_frame_total(modules.globals.target_path)
+    return 1 if is_image(modules.globals.target_path) else 0
+
+
+def preview_target_frame(index: int):
+    if modules.globals.frames_directory:
+        if not FRAMES_PREVIEW_PATHS:
+            return None
+        path = FRAMES_PREVIEW_PATHS[max(0, min(index, len(FRAMES_PREVIEW_PATHS) - 1))]
+        return cv2.imread(path)
+    if is_video(modules.globals.target_path):
+        return get_video_frame(modules.globals.target_path, max(1, index + 1))
+    if is_image(modules.globals.target_path):
+        return cv2.imread(modules.globals.target_path)
+    return None
+
+
 def set_many_faces(enabled: bool) -> None:
     modules.globals.many_faces = enabled
     if enabled:
         modules.globals.target_face_embedding = None
-        update_status('Many faces enabled: individual person selection cleared.')
+        modules.globals.face_assignments.clear()
+        update_assignments_label()
+        update_status('Many faces enabled: individual mappings cleared.')
 
 
 def select_source_path() -> None:
@@ -254,12 +373,18 @@ def select_source_path() -> None:
 
 
 def select_target_path() -> None:
-    global RECENT_DIRECTORY_TARGET, img_ft, vid_ft
+    global RECENT_DIRECTORY_TARGET, FRAMES_PREVIEW_PATHS, img_ft, vid_ft
 
-    PREVIEW.withdraw()
-    # An identity selected for a previous video must never carry over.
-    modules.globals.target_face_embedding = None
     target_path = ctk.filedialog.askopenfilename(title='select an target image or video', initialdir=RECENT_DIRECTORY_TARGET, filetypes=[img_ft, vid_ft])
+    if not target_path:
+        return
+    PREVIEW.withdraw()
+    # Selections for an earlier target must never carry over.
+    modules.globals.target_face_embedding = None
+    modules.globals.frames_directory = None
+    FRAMES_PREVIEW_PATHS = []
+    modules.globals.face_assignments.clear()
+    update_assignments_label()
     if is_image(target_path):
         modules.globals.target_path = target_path
         RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
@@ -275,19 +400,19 @@ def select_target_path() -> None:
         target_label.configure(image=None)
 
 
-def open_face_picker() -> None:
+def open_face_picker(multiple: bool = False) -> None:
     """Select a face on an original video frame and remember its identity.
 
     All detection happens on the local machine. The selected embedding remains
     in RAM, and frames that cannot be matched confidently are left untouched.
     """
     target_path = modules.globals.target_path
-    if not target_path or not (is_image(target_path) or is_video(target_path)):
-        update_status('Select a target image or video first.')
+    if not modules.globals.frames_directory and not (is_image(target_path) or is_video(target_path)):
+        update_status('Select a target video, image, or PNG frames folder first.')
         return
 
     picker = ctk.CTkToplevel(ROOT)
-    picker.title('Choose the person to replace')
+    picker.title('Add person + reference photo' if multiple else 'Choose the person to replace')
     picker.geometry('900x720')
     picker.minsize(650, 650)
 
@@ -309,25 +434,21 @@ def open_face_picker() -> None:
     feedback.pack(padx=12, pady=5)
 
     state = {'faces': [], 'boxes': [], 'display_size': (0, 0)}
-    total_frames = get_video_frame_total(target_path) if is_video(target_path) else 1
+    total_frames = preview_target_count()
     max_frame_index = max(0, total_frames - 1)
     frame_slider = ctk.CTkSlider(
         picker, from_=0, to=max(1, max_frame_index),
         number_of_steps=max(1, max_frame_index)
     )
     frame_slider.set(min(max_frame_index, 30))
-    if is_video(target_path):
+    if total_frames > 1:
         frame_slider.pack(fill='x', padx=30, pady=(5, 3))
 
     def load_frame() -> None:
-        frame_index = int(round(frame_slider.get())) if is_video(target_path) else 0
+        frame_index = int(round(frame_slider.get())) if total_frames > 1 else 0
         feedback.configure(text=f'Detecting faces in frame {frame_index + 1}...')
         picker.update_idletasks()
-        if is_video(target_path):
-            # capturer.get_video_frame expects a one-based frame number.
-            frame = get_video_frame(target_path, frame_index + 1)
-        else:
-            frame = cv2.imread(target_path)
+        frame = preview_target_frame(frame_index)
         if frame is None:
             feedback.configure(text='Could not read this frame. Try another one.')
             return
@@ -371,24 +492,59 @@ def open_face_picker() -> None:
                 if embedding is None:
                     feedback.configure(text='No identity embedding found. Choose another frame.')
                     return
-                modules.globals.target_face_embedding = embedding.copy()
-                modules.globals.many_faces = False
-                many_faces_switch.deselect()
-                update_status('Person selected: only that identity will be face-swapped.')
+                if multiple:
+                    photo = ctk.filedialog.askopenfilename(
+                        title='Select the source photo for this person',
+                        initialdir=RECENT_DIRECTORY_SOURCE,
+                        filetypes=[img_ft]
+                    )
+                    if not is_image(photo):
+                        feedback.configure(text='Choose a valid source photo to add the person.')
+                        return
+                    for current in modules.globals.face_assignments:
+                        score = float(embedding @ current['embedding'])
+                        if score > 0.92:
+                            feedback.configure(
+                                text='This person is already mapped. Choose another person '
+                                     'or clear existing assignments.'
+                            )
+                            return
+                    modules.globals.face_assignments.append({
+                        'embedding': embedding.copy(),
+                        'source_path': photo
+                    })
+                    modules.globals.target_face_embedding = None
+                    modules.globals.many_faces = False
+                    many_faces_switch.deselect()
+                    update_assignments_label()
+                    update_status(
+                        f'{len(modules.globals.face_assignments)} person(s) mapped to source photos.'
+                    )
+                else:
+                    modules.globals.face_assignments.clear()
+                    update_assignments_label()
+                    modules.globals.target_face_embedding = embedding.copy()
+                    modules.globals.many_faces = False
+                    many_faces_switch.deselect()
+                    update_status('Single person selected: only that identity will be swapped.')
                 picker.destroy()
                 return
         feedback.configure(text='Click inside one of the highlighted face rectangles.')
 
     def clear_selection() -> None:
-        modules.globals.target_face_embedding = None
-        update_status('Person selection cleared: original leftmost-face mode.')
+        if not multiple:
+            modules.globals.target_face_embedding = None
+            update_status('Person selection cleared: original leftmost-face mode.')
+        else:
+            update_status('Cancelled; existing assignments were preserved.')
         picker.destroy()
 
     preview.bind('<Button-1>', choose_face)
     actions = ctk.CTkFrame(picker)
     actions.pack(pady=(5, 12))
     ctk.CTkButton(actions, text='Load frame', command=load_frame).pack(side='left', padx=6, pady=5)
-    ctk.CTkButton(actions, text='Clear selection', command=clear_selection).pack(side='left', padx=6, pady=5)
+    ctk.CTkButton(actions, text='Clear selection' if not multiple else 'Close',
+                  command=clear_selection).pack(side='left', padx=6, pady=5)
     ctk.CTkButton(actions, text='Cancel', command=picker.destroy).pack(side='left', padx=6, pady=5)
 
     load_frame()
@@ -397,7 +553,22 @@ def open_face_picker() -> None:
 def select_output_path(start: Callable[[], None]) -> None:
     global RECENT_DIRECTORY_OUTPUT, img_ft, vid_ft
 
-    if is_image(modules.globals.target_path):
+    if modules.globals.frames_directory:
+        try:
+            value = float(frames_fps_entry.get().replace(',', '.'))
+            if not 1 <= value <= 120:
+                raise ValueError()
+            modules.globals.frames_fps = value
+        except (TypeError, ValueError):
+            update_status('Existing frames FPS must be between 1 and 120.')
+            return
+        output_path = ctk.filedialog.asksaveasfilename(
+            title='Output MP4 (reusable for resume)',
+            filetypes=[('MP4 video', '*.mp4')], defaultextension='.mp4',
+            initialfile=Path(modules.globals.frames_directory).name + '_edited.mp4',
+            initialdir=RECENT_DIRECTORY_OUTPUT
+        )
+    elif is_image(modules.globals.target_path):
         output_path = ctk.filedialog.asksaveasfilename(title='save image output file', filetypes=[img_ft], defaultextension='.png', initialfile='output.png', initialdir=RECENT_DIRECTORY_OUTPUT)
     elif is_video(modules.globals.target_path):
         output_path = ctk.filedialog.asksaveasfilename(title='save video output file', filetypes=[vid_ft], defaultextension='.mp4', initialfile='output.mp4', initialdir=RECENT_DIRECTORY_OUTPUT)
@@ -433,35 +604,48 @@ def render_video_preview(video_path: str, size: Tuple[int, int], frame_number: i
 def toggle_preview() -> None:
     if PREVIEW.state() == 'normal':
         PREVIEW.withdraw()
-    elif modules.globals.source_path and modules.globals.target_path:
+    elif (modules.globals.source_path or modules.globals.face_assignments) and preview_target_count():
         init_preview()
         update_preview()
         PREVIEW.deiconify()
+    else:
+        update_status('Select a target and a source face or person assignment.')
 
 
 def init_preview() -> None:
-    if is_image(modules.globals.target_path):
-        preview_slider.pack_forget()
-    if is_video(modules.globals.target_path):
-        video_frame_total = get_video_frame_total(modules.globals.target_path)
-        preview_slider.configure(to=video_frame_total)
+    count = preview_target_count()
+    if count > 1:
+        preview_slider.configure(from_=0, to=count - 1,
+                                 number_of_steps=max(1, count - 1))
         preview_slider.pack(fill='x')
         preview_slider.set(0)
+    else:
+        preview_slider.pack_forget()
 
 
 def update_preview(frame_number: int = 0) -> None:
-    if modules.globals.source_path and modules.globals.target_path:
-        temp_frame = get_video_frame(modules.globals.target_path, max(1, int(round(frame_number)) + 1))
-        if modules.globals.nsfw == False:
-            from modules.predicter import predict_frame
-            if predict_frame(temp_frame):
-                quit()
-        for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-            temp_frame = frame_processor.process_frame(
-                get_one_face(cv2.imread(modules.globals.source_path)),
-                temp_frame
-            )
-        image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
-        image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
-        image = ctk.CTkImage(image, size=image.size)
-        preview_label.configure(image=image)
+    if not ((modules.globals.source_path or modules.globals.face_assignments)
+            and preview_target_count()):
+        return
+    temp_frame = preview_target_frame(max(0, int(round(frame_number))))
+    if temp_frame is None:
+        update_status('Cannot read selected preview frame.')
+        return
+    if modules.globals.nsfw is False:
+        from modules.predicter import predict_frame
+        if predict_frame(temp_frame):
+            update_status('Preview is not available for this frame.')
+            return
+    from modules.processors.frame import face_swapper
+    source = (
+        face_swapper.prepare_multi_assignments()
+        if modules.globals.face_assignments else
+        face_swapper.load_source_face(modules.globals.source_path)
+    )
+    for processor in get_frame_processors_modules(modules.globals.frame_processors):
+        temp_frame = processor.process_frame(source, temp_frame)
+    image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
+    image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
+    displayed = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+    preview_label.configure(image=displayed)
+    preview_label.image = displayed

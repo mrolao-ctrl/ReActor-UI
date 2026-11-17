@@ -9,6 +9,7 @@ import modules.processors.frame.core
 from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import select_matching_face
+from modules.multi_face import prepare_assignments, swap_assigned_faces
 from modules.frame_io import read_image, write_frame, UnreadableFrameError
 from modules.typing import Face, Frame
 from modules.utilities import conditional_download, resolve_relative_path, is_image, is_video
@@ -25,16 +26,25 @@ def pre_check() -> bool:
 
 
 def pre_start() -> bool:
-    if not is_image(modules.globals.source_path):
+    if modules.globals.face_assignments:
+        try:
+            prepare_multi_assignments()
+        except (RuntimeError, ValueError) as error:
+            update_status(str(error), NAME)
+            return False
+    elif not is_image(modules.globals.source_path):
         update_status('Select an image for source path.', NAME)
         return False
-    try:
-        if load_source_face(modules.globals.source_path) is None:
-            update_status('No face in source path detected.', NAME)
+    if not modules.globals.face_assignments:
+        try:
+            if load_source_face(modules.globals.source_path) is None:
+                update_status('No face in source path detected.', NAME)
+                return False
+        except RuntimeError as error:
+            update_status(str(error), NAME)
             return False
-    except RuntimeError as error:
-        update_status(str(error), NAME)
-        return False
+    if modules.globals.frames_directory:
+        return True
     if not is_image(modules.globals.target_path) and not is_video(modules.globals.target_path):
         update_status('Select an image or video for target path.', NAME)
         return False
@@ -47,6 +57,10 @@ def load_source_face(source_path: str) -> Face:
     if source_face is None:
         raise RuntimeError(f'No face detected in reference photo: {source_path}')
     return source_face
+
+
+def prepare_multi_assignments() -> list:
+    return prepare_assignments(modules.globals.face_assignments, load_source_face)
 
 
 def get_face_swapper() -> Any:
@@ -63,8 +77,26 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     return get_face_swapper().get(temp_frame, target_face, source_face, paste_back=True)
 
 
-def process_frame(source_face: Face, temp_frame: Frame, frame_path=None) -> Frame:
-    # Record selected face coordinates BEFORE the swap changes the identity.
+def process_frame(source_face: Face, temp_frame: Frame, frame_path=None,
+                  prepared_assignments=None) -> Frame:
+    # Multiple assignments are always evaluated against the original frame.
+    # Later swaps cannot change who the next assignment matches.
+    if prepared_assignments is None and isinstance(source_face, list):
+        prepared_assignments = source_face
+    if prepared_assignments is None and modules.globals.face_assignments:
+        # Single frame preview fallback. Video loops prepare this just once.
+        prepared_assignments = prepare_multi_assignments()
+    if prepared_assignments is not None:
+        temp_frame, boxes = swap_assigned_faces(
+            temp_frame, prepared_assignments, get_many_faces, swap_face
+        )
+        if frame_path is None:
+            modules.globals.preview_face_boxes = boxes
+        else:
+            modules.globals.frame_target_boxes[os.path.abspath(frame_path)] = boxes
+        return temp_frame
+
+    # Original one-person and many-faces behaviour remains unchanged.
     if modules.globals.target_face_embedding is not None:
         chosen = select_matching_face(
             get_many_faces(temp_frame), modules.globals.target_face_embedding
@@ -103,7 +135,7 @@ def process_frames(source_face: Face, temp_frame_paths: List[str], progress: Any
 
 
 def process_image(source_path: str, target_path: str, output_path: str) -> None:
-    source_face = load_source_face(source_path)
+    source_face = prepare_multi_assignments() if modules.globals.face_assignments else load_source_face(source_path)
     target_frame = read_image(target_path, 'target image')
     result = process_frame(source_face, target_frame)
     if not cv2.imwrite(output_path, result):
@@ -111,5 +143,5 @@ def process_image(source_path: str, target_path: str, output_path: str) -> None:
 
 
 def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
-    source_face = load_source_face(source_path)
+    source_face = prepare_multi_assignments() if modules.globals.face_assignments else load_source_face(source_path)
     modules.processors.frame.core.process_video(source_face, temp_frame_paths, process_frames)
