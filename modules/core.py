@@ -37,6 +37,8 @@ def parse_args() -> None:
     program.add_argument('-s', '--source', help='select an source image', dest='source_path')
     program.add_argument('-t', '--target', help='select an target image or video', dest='target_path')
     program.add_argument('-o', '--output', help='select output file or directory', dest='output_path')
+    program.add_argument('--frames-dir', help='use existing numbered PNG frames instead of a video', dest='frames_dir')
+    program.add_argument('--frames-fps', help='FPS for existing frames mode (no audio)', dest='frames_fps', type=float, default=30.0)
     program.add_argument('--frame-processor', help='pipeline of frame processors', dest='frame_processor', default=['face_swapper'], choices=['face_swapper', 'face_enhancer'], nargs='+')
     program.add_argument('--keep-fps', help='keep original fps', dest='keep_fps', action='store_true', default=False)
     program.add_argument('--keep-audio', help='keep original audio', dest='keep_audio', action='store_true', default=True)
@@ -60,10 +62,12 @@ def parse_args() -> None:
     args = program.parse_args()
 
     modules.globals.source_path = args.source_path
+    modules.globals.frames_directory = args.frames_dir
+    modules.globals.frames_fps = args.frames_fps
     modules.globals.target_path = args.target_path
     modules.globals.output_path = normalize_output_path(modules.globals.source_path, modules.globals.target_path, args.output_path)
     modules.globals.frame_processors = args.frame_processor
-    modules.globals.headless = args.source_path or args.target_path or args.output_path
+    modules.globals.headless = bool(args.source_path or args.target_path or args.output_path or args.frames_dir)
     modules.globals.keep_fps = args.keep_fps
     modules.globals.keep_audio = args.keep_audio
     modules.globals.keep_frames = args.keep_frames
@@ -174,6 +178,22 @@ def update_status(message: str, scope: str = 'REACTOR.CORE') -> None:
 
 
 def start() -> None:
+    # Direct PNG mode never extracts frames or reads an original video.
+    if modules.globals.frames_directory:
+        if not modules.globals.output_path:
+            raise RuntimeError('Select an output MP4 file for existing frames mode')
+        from modules.processors.frame import face_swapper
+        from modules.frames_workflow import run_existing_frames
+        if not face_swapper.pre_start():
+            return
+        run_existing_frames(
+            modules.globals.frames_directory, modules.globals.output_path,
+            float(modules.globals.frames_fps),
+            bool(modules.globals.fp_ui.get('face_enhancer', False)),
+        )
+        update_status('Existing frames exported successfully.')
+        return
+
     modules.globals.frame_target_boxes.clear()
     modules.globals.preview_face_boxes = []
     modules.globals.frame_recovery_log.clear()
