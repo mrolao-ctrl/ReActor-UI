@@ -214,20 +214,18 @@ def set_enhancer_strength(value: float, label: ctk.CTkLabel) -> None:
 
 def compare_enhancer() -> None:
     """Render the face swap and GFPGAN once, then compare blend levels locally."""
-    if not modules.globals.source_path or not modules.globals.target_path:
-        update_status('Select a source face and a target first.')
+    if (not modules.globals.source_path and not modules.globals.face_assignments) or preview_target_count() == 0:
+        update_status('Select a source face/mapping and a video or frames first.')
         return
 
     from modules.processors.frame import face_swapper, face_enhancer
     from modules.enhancement import blend_selected_faces
 
-    frame_number = 1
-    if is_video(modules.globals.target_path) and PREVIEW.state() == 'normal':
-        frame_number = max(1, int(round(preview_slider.get())) + 1)
-    if is_video(modules.globals.target_path):
-        frame = get_video_frame(modules.globals.target_path, frame_number)
-    else:
-        frame = cv2.imread(modules.globals.target_path)
+    frame_index = 0
+    if preview_target_count() > 1 and PREVIEW.state() == 'normal':
+        frame_index = max(0, int(round(preview_slider.get())))
+    frame = preview_target_frame(frame_index)
+    frame_number = frame_index + 1
     if frame is None:
         update_status('Cannot read comparison frame.')
         return
@@ -242,7 +240,11 @@ def compare_enhancer() -> None:
     comparison.update_idletasks()
 
     try:
-        face_swapper_source = face_swapper.load_source_face(modules.globals.source_path)
+        face_swapper_source = (
+            face_swapper.prepare_multi_assignments()
+            if modules.globals.face_assignments else
+            face_swapper.load_source_face(modules.globals.source_path)
+        )
         swapped = face_swapper.process_frame(face_swapper_source, frame)
         boxes = list(modules.globals.preview_face_boxes)
         if not boxes:
@@ -600,35 +602,48 @@ def render_video_preview(video_path: str, size: Tuple[int, int], frame_number: i
 def toggle_preview() -> None:
     if PREVIEW.state() == 'normal':
         PREVIEW.withdraw()
-    elif modules.globals.source_path and modules.globals.target_path:
+    elif (modules.globals.source_path or modules.globals.face_assignments) and preview_target_count():
         init_preview()
         update_preview()
         PREVIEW.deiconify()
+    else:
+        update_status('Select a target and a source face or person assignment.')
 
 
 def init_preview() -> None:
-    if is_image(modules.globals.target_path):
-        preview_slider.pack_forget()
-    if is_video(modules.globals.target_path):
-        video_frame_total = get_video_frame_total(modules.globals.target_path)
-        preview_slider.configure(to=video_frame_total)
+    count = preview_target_count()
+    if count > 1:
+        preview_slider.configure(from_=0, to=count - 1,
+                                 number_of_steps=max(1, count - 1))
         preview_slider.pack(fill='x')
         preview_slider.set(0)
+    else:
+        preview_slider.pack_forget()
 
 
 def update_preview(frame_number: int = 0) -> None:
-    if modules.globals.source_path and modules.globals.target_path:
-        temp_frame = get_video_frame(modules.globals.target_path, max(1, int(round(frame_number)) + 1))
-        if modules.globals.nsfw == False:
-            from modules.predicter import predict_frame
-            if predict_frame(temp_frame):
-                quit()
-        for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-            temp_frame = frame_processor.process_frame(
-                get_one_face(cv2.imread(modules.globals.source_path)),
-                temp_frame
-            )
-        image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
-        image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
-        image = ctk.CTkImage(image, size=image.size)
-        preview_label.configure(image=image)
+    if not ((modules.globals.source_path or modules.globals.face_assignments)
+            and preview_target_count()):
+        return
+    temp_frame = preview_target_frame(max(0, int(round(frame_number))))
+    if temp_frame is None:
+        update_status('Cannot read selected preview frame.')
+        return
+    if modules.globals.nsfw is False:
+        from modules.predicter import predict_frame
+        if predict_frame(temp_frame):
+            update_status('Preview is not available for this frame.')
+            return
+    from modules.processors.frame import face_swapper
+    source = (
+        face_swapper.prepare_multi_assignments()
+        if modules.globals.face_assignments else
+        face_swapper.load_source_face(modules.globals.source_path)
+    )
+    for processor in get_frame_processors_modules(modules.globals.frame_processors):
+        temp_frame = processor.process_frame(source, temp_frame)
+    image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
+    image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
+    displayed = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+    preview_label.configure(image=displayed)
+    preview_label.image = displayed
