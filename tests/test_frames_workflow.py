@@ -28,6 +28,7 @@ class ExistingFramesTests(unittest.TestCase):
             'source_path': modules.globals.source_path,
             'enhancer_strength': modules.globals.enhancer_strength,
             'enhancer_mode': modules.globals.enhancer_mode,
+            'occlusion_landmark_mode': modules.globals.occlusion_landmark_mode,
             'video_quality': modules.globals.video_quality,
             'video_encoder': modules.globals.video_encoder,
             'many_faces': modules.globals.many_faces,
@@ -60,6 +61,18 @@ class ExistingFramesTests(unittest.TestCase):
                          [Path(path).name for path in resolved])
         self.assertEqual(2, len(repairs))
         self.assertEqual(b'not-a-valid-PNG', (self.inputs / '0003.png').read_bytes())
+
+    def test_landmark_mode_changes_resume_fingerprint(self):
+        out = str(self.root / 'final.mp4')
+        modules.globals.occlusion_landmark_mode = 'auto'
+        default = job_fingerprint(
+            str(self.inputs), out, modules.globals.face_assignments, 30, False, 2
+        )
+        modules.globals.occlusion_landmark_mode = '3-point'
+        forced = job_fingerprint(
+            str(self.inputs), out, modules.globals.face_assignments, 30, False, 2
+        )
+        self.assertNotEqual(default, forced)
 
     def test_work_folder_cannot_be_reused_with_different_settings(self):
         out = str(self.root / 'final.mp4')
