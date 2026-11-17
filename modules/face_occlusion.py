@@ -33,7 +33,7 @@ LANDMARK_TEMPLATE = np.array([
     [0.61507734, 0.72034453],
 ], dtype=np.float32) * MODEL_SIZE
 LANDMARK_TEMPLATE_3 = LANDMARK_TEMPLATE[:3].copy()
-LANDMARK_MODES = ('auto', '3-point', '5-point')
+LANDMARK_MODES = ('auto', '2-point-left', '2-point-right', '3-point', '5-point')
 
 _MODEL_SESSION = None
 _MODEL_LOCK = threading.Lock()
@@ -107,23 +107,68 @@ def _mouth_geometry_reliable(points: np.ndarray, upper_matrix: np.ndarray) -> bo
     return float(np.max(np.linalg.norm(mouth - reference, axis=1))) <= 36.0
 
 
-def estimate_alignment_matrix(landmarks: np.ndarray, mode: str = 'auto') -> tuple:
-    """Build a similarity transform to a 256px crop; return (matrix, mode used).
+def _two_point_alignment(points: np.ndarray, side: str) -> np.ndarray:
+    """Align a visible eye and mouth corner using a 2D similarity transform.
 
-    3-point requires eyes and nose, 5-point requires all facial landmarks.
-    Auto checks lower-face landmark geometry and falls back to three points.
-    This does not recover missing face detections or reliably detect occlusion.
+    Side refers to the landmark index (image-left or image-right), not to
+    anatomical handedness. This is an experimental fallback for profiles.
+    It cannot determine 3D head pose or landmark visibility from two points.
+    """
+    if points.shape != (5, 2):
+        raise ValueError('Two-point mode requires five labelled landmark slots')
+    indices = (0, 3) if side == 'left' else (1, 4)
+    source = points[list(indices)]
+    if not np.isfinite(source).all():
+        raise ValueError(f'Two-point {side} eye/mouth landmarks are unavailable')
+    target = LANDMARK_TEMPLATE[list(indices)]
+    src_vector = source[1] - source[0]
+    dst_vector = target[1] - target[0]
+    baseline_sq = float(np.dot(src_vector, src_vector))
+    if baseline_sq < 64.0:
+        raise ValueError('Two-point landmarks are too close for safe alignment')
+    a = float(np.dot(src_vector, dst_vector)) / baseline_sq
+    b = float(np.cross(src_vector, dst_vector)) / baseline_sq
+    scale = float(np.hypot(a, b))
+    if not 0.25 <= scale <= 10.0:
+        raise ValueError('Two-point alignment scale is implausible')
+    rotation_scale = np.array([[a, -b], [b, a]], dtype=np.float32)
+    offset = target[0] - rotation_scale @ source[0]
+    return np.column_stack((rotation_scale, offset)).astype(np.float32)
+
+
+def estimate_alignment_matrix(landmarks: np.ndarray, mode: str = 'auto') -> tuple:
+    """Return (similarity transform, mode used) for XSeg's aligned crop.
+
+    Two-point modes explicitly use one eye and the same-side mouth corner.
+    Auto prefers 5 / 3 landmarks; it falls back to 2 only when exactly two
+    labelled points remain valid. Detector landmarks do NOT indicate
+    visibility or confidence, so auto cannot infer a real side-on profile.
     """
     if mode not in LANDMARK_MODES:
         raise ValueError(f'Invalid occlusion landmark mode: {mode}')
     points = np.asarray(landmarks, dtype=np.float32)
     if points.shape not in ((3, 2), (5, 2)):
-        raise ValueError('Expected three or five facial landmark points')
-    if not _upper_face_is_valid(points[:3]):
-        raise ValueError('Eye/nose landmarks are missing or unreliable')
+        raise ValueError('Expected three or five labelled facial landmark slots')
+
+    if mode in ('2-point-left', '2-point-right'):
+        side = mode.rsplit('-', 1)[1]
+        return _two_point_alignment(points, side), mode
+
     if mode == '5-point' and (points.shape != (5, 2) or
                                not np.isfinite(points).all()):
         raise ValueError('5-point mode requires all five valid facial landmarks')
+
+    if not _upper_face_is_valid(points[:3]):
+        # Missing landmarks can be represented as NaN in synthetic or
+        # externally supplied data. Do not guess their identity from a
+        # bare pair of coordinates or from geometrically strange detections.
+        if mode == 'auto' and points.shape == (5, 2):
+            valid = np.isfinite(points).all(axis=1)
+            if int(valid.sum()) == 2:
+                for side, indices in (('left', (0, 3)), ('right', (1, 4))):
+                    if all(valid[index] for index in indices):
+                        return _two_point_alignment(points, side), '2-point-' + side
+        raise ValueError('Eye/nose landmarks are missing or unreliable')
 
     upper_matrix, _ = cv2.estimateAffinePartial2D(
         points[:3], LANDMARK_TEMPLATE_3, method=cv2.LMEDS
@@ -131,12 +176,10 @@ def estimate_alignment_matrix(landmarks: np.ndarray, mode: str = 'auto') -> tupl
     if upper_matrix is None or not np.isfinite(upper_matrix).all():
         raise ValueError('Could not align the visible upper face')
 
-    # Refuse a severely inconsistent 3-point fit; it may have matched only two.
     projected = cv2.transform(points[:3][None, :, :], upper_matrix)[0]
     residuals = np.linalg.norm(projected - LANDMARK_TEMPLATE_3, axis=1)
     if float(np.max(residuals)) > 18.0:
         raise ValueError('Upper face landmarks cannot be aligned reliably')
-
     if mode == '3-point':
         return upper_matrix, '3-point'
 
@@ -171,7 +214,7 @@ def get_visibility_mask(frame: np.ndarray, face: Any, mode: str = None) -> np.nd
         mode = modules.globals.occlusion_landmark_mode
     matrix, used_mode = estimate_alignment_matrix(landmarks, mode)
     # The aligned crop is what XSeg sees; it never receives landmarks.
-    # In forced 3-point mode, lower-face detector landmarks are ignored.
+    # Forced two- or three-point modes ignore other detector landmarks.
     aligned = cv2.warpAffine(
         frame, matrix, (MODEL_SIZE, MODEL_SIZE),
         flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101
