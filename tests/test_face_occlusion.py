@@ -192,7 +192,7 @@ class OcclusionTests(unittest.TestCase):
             estimate_alignment_matrix(points, '2-point-right')
 
     def test_two_point_rejects_unlabelled_pair(self):
-        with self.assertRaisesRegex(ValueError, 'labelled landmark'):
+        with self.assertRaisesRegex(ValueError, 'labelled facial landmark'):
             estimate_alignment_matrix(LANDMARK_TEMPLATE[[0, 3]], '2-point-left')
 
     def test_two_point_rejects_collapsed_pair(self):
