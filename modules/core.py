@@ -49,6 +49,7 @@ def parse_args() -> None:
     program.add_argument('--enhancer-strength', help='GFPGAN blend strength 0..100', dest='enhancer_strength', type=int, default=40, choices=range(101))
     program.add_argument('--enhancer-mode', help='face restoration method', dest='enhancer_mode', choices=['gfpgan', 'sharpen'], default='gfpgan')
     program.add_argument('--occlusion-protection', help='preserve foreground occluders using optional XSeg model', action='store_true', default=False)
+    program.add_argument('--offline', help='use installed models only; never download model files', action='store_true', default=False)
     program.add_argument('--occlusion-landmarks', help='alignment for XSeg (auto, three or five facial points)', choices=['auto', '3-point', '5-point'], default='auto')
     program.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=suggest_max_memory())
     program.add_argument('--execution-provider', help='execution provider', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
@@ -79,6 +80,7 @@ def parse_args() -> None:
     modules.globals.enhancer_strength = args.enhancer_strength
     modules.globals.enhancer_mode = 'Sharpen only' if args.enhancer_mode == 'sharpen' else 'GFPGAN'
     modules.globals.occlusion_protection = args.occlusion_protection
+    modules.globals.offline_models = args.offline
     modules.globals.occlusion_landmark_mode = args.occlusion_landmarks
     modules.globals.max_memory = args.max_memory
     modules.globals.execution_providers = decode_execution_providers(args.execution_provider)
