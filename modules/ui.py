@@ -148,9 +148,20 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
             modules.globals, 'occlusion_protection', bool(protection_value.get())
         )
     ).place(relx=0.1, rely=0.738)
-    ctk.CTkLabel(
-        root, text='Experimental / local CPU', font=ctk.CTkFont(size=11)
-    ).place(relx=0.59, rely=0.738)
+    ctk.CTkLabel(root, text='Landmarks:').place(
+        relx=0.55, rely=0.738, relwidth=0.14
+    )
+    landmark_mode_menu = ctk.CTkOptionMenu(
+        root, values=['Auto', '3-point', '5-point'],
+        command=lambda value: setattr(
+            modules.globals, 'occlusion_landmark_mode', value.lower()
+        )
+    )
+    landmark_mode_menu.set(
+        'Auto' if modules.globals.occlusion_landmark_mode == 'auto'
+        else modules.globals.occlusion_landmark_mode
+    )
+    landmark_mode_menu.place(relx=0.70, rely=0.738, relwidth=0.20)
 
     ctk.CTkLabel(root, text='Enhancer method:').place(relx=0.1, rely=0.776)
     mode_menu = ctk.CTkOptionMenu(
