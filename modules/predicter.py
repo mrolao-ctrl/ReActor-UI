@@ -4,7 +4,7 @@ from PIL import Image
 
 from modules.typing import Frame
 
-MAX_PROBABILITY = 0.85
+MAX_PROBABILITY = 2
 
 
 def predict_frame(target_frame: Frame) -> bool:
