@@ -179,6 +179,23 @@ def update_status(message: str, scope: str = 'REACTOR.CORE') -> None:
         ui.update_status(message)
 
 
+def report_content_rejection(media_type: str) -> None:
+    """Reject flagged input with a clear message instead of silently exiting.
+
+    Nothing is swapped or exported. Keep the GUI running so the user can
+    select another (non-explicit) input. Headless runs receive console text.
+    """
+    message = (
+        f'Processing stopped: the {media_type} was flagged by the '
+        'content-safety classifier. No face swap was performed. '
+        'Choose non-explicit footage.'
+    )
+    update_status(message, 'REACTOR.SAFETY')
+    if not modules.globals.headless and ui.ROOT is not None:
+        from tkinter import messagebox
+        messagebox.showwarning('ReActor - processing stopped', message, parent=ui.ROOT)
+
+
 def start() -> None:
     # Direct PNG mode never extracts frames or reads an original video.
     if modules.globals.frames_directory:
@@ -210,7 +227,8 @@ def start() -> None:
         if modules.globals.nsfw == False:
             from modules.predicter import predict_image
             if predict_image(modules.globals.target_path):
-                destroy()
+                report_content_rejection('image')
+                return
         shutil.copy2(modules.globals.target_path, modules.globals.output_path)
         for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
             update_status('Progressing...', frame_processor.NAME)
@@ -225,7 +243,8 @@ def start() -> None:
     if modules.globals.nsfw == False:
         from modules.predicter import predict_video
         if predict_video(modules.globals.target_path):
-            destroy()
+            report_content_rejection('video')
+            return
     update_status('Creating temp resources...')
     create_temp(modules.globals.target_path)
     update_status('Extracting frames...')
