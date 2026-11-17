@@ -119,13 +119,16 @@ class OcclusionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'five valid'):
             estimate_alignment_matrix(LANDMARK_TEMPLATE_3, '5-point')
 
-    def test_invalid_eye_or_nose_locations_are_rejected_in_all_modes(self):
+    def test_invalid_eye_or_nose_rejected_in_fixed_upper_face_modes(self):
         occluded = LANDMARK_TEMPLATE.copy()
         occluded[1] = occluded[0]  # Eye baseline collapses to zero.
-        for mode in ('auto', '3-point', '5-point'):
+        for mode in ('3-point', '5-point'):
             with self.subTest(mode=mode):
                 with self.assertRaisesRegex(ValueError, 'Eye/nose'):
                     estimate_alignment_matrix(occluded, mode)
+        # Auto must still try the two-point modes instead of giving up.
+        _, used = estimate_alignment_matrix(occluded, 'auto')
+        self.assertIn(used, ('2-point-left', '2-point-right'))
 
     def test_invalid_mode_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Invalid occlusion'):
@@ -143,6 +146,53 @@ class OcclusionTests(unittest.TestCase):
             )
         self.assertEqual(0.0, float(mask[185, 130]))
         self.assertGreater(float(mask[110, 130]), 0.95)
+
+    def test_auto_tries_right_side_when_upper_face_alignment_fails(self):
+        # Simulate an unreliable predicted eye/nose while the right-side
+        # eye/mouth pair remains correctly labelled and spaced.
+        points = LANDMARK_TEMPLATE.copy()
+        points[0] = [30, 20]
+        points[2] = [220, 15]
+        points[3] = [60, 45]
+        for mode in ('3-point', '5-point'):
+            with self.subTest(mode=mode):
+                with self.assertRaises(ValueError):
+                    estimate_alignment_matrix(points, mode)
+        matrix, mode = estimate_alignment_matrix(points, 'auto')
+        self.assertEqual('2-point-right', mode)
+        np.testing.assert_allclose(
+            cv2.transform(points[[1, 4]][None, :, :], matrix)[0],
+            LANDMARK_TEMPLATE[[1, 4]], atol=0.02
+        )
+
+    def test_auto_handles_two_finite_points_and_ranks_one_pair(self):
+        points = np.full((5, 2), np.nan, dtype=np.float32)
+        points[[1, 4]] = LANDMARK_TEMPLATE[[1, 4]]
+        matrix, mode = estimate_alignment_matrix(points, 'auto')
+        self.assertEqual('2-point-right', mode)
+        self.assertTrue(np.isfinite(matrix).all())
+
+    def test_auto_keeps_failing_safely_when_no_pairs_can_align(self):
+        points = np.full((5, 2), np.nan, dtype=np.float32)
+        points[1] = LANDMARK_TEMPLATE[1]
+        points[4] = points[1]  # A zero-length right pair.
+        with self.assertRaisesRegex(ValueError, 'No reliable XSeg alignment'):
+            estimate_alignment_matrix(points, 'auto')
+
+    def test_forced_two_point_modes_do_not_change(self):
+        points = LANDMARK_TEMPLATE.copy()
+        points[2] = [220, 15]
+        for side in ('left', 'right'):
+            with self.subTest(side=side):
+                _, used = estimate_alignment_matrix(points, '2-point-' + side)
+                self.assertEqual('2-point-' + side, used)
+
+    def test_auto_survives_missing_mouth_and_prefers_three(self):
+        points = LANDMARK_TEMPLATE.copy()
+        points[3:] = np.nan
+        matrix, mode = estimate_alignment_matrix(points, 'auto')
+        self.assertEqual('3-point', mode)
+        self.assertTrue(np.isfinite(matrix).all())
 
     def test_two_point_left_eye_and_mouth_can_align_profile(self):
         points = LANDMARK_TEMPLATE.copy()
