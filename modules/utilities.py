@@ -132,15 +132,42 @@ def is_video(video_path: str) -> bool:
 
 
 def conditional_download(download_directory_path: str, urls: List[str]) -> None:
+    """Use cached models first; --offline prohibits any network download.
+
+    A missing/empty model is reported by filename. Partial downloads are
+    removed after an exception, so they cannot be mistaken for cached models.
+    """
     if not os.path.exists(download_directory_path):
         os.makedirs(download_directory_path)
     for url in urls:
         download_file_path = os.path.join(download_directory_path, os.path.basename(url))
-        if not os.path.exists(download_file_path):
-            request = urllib.request.urlopen(url) # type: ignore[attr-defined]
-            total = int(request.headers.get('Content-Length', 0))
-            with tqdm(total=total, desc='Downloading', unit='B', unit_scale=True, unit_divisor=1024) as progress:
-                urllib.request.urlretrieve(url, download_file_path, reporthook=lambda count, block_size, total_size: progress.update(block_size)) # type: ignore[attr-defined]
+        if os.path.isfile(download_file_path) and os.path.getsize(download_file_path) > 0:
+            continue
+        if modules.globals.offline_models:
+            raise RuntimeError(
+                f'Offline mode: model not installed: {download_file_path}. '
+                'Copy the model into models/ before restarting.'
+            )
+        # Preserve the original auto-download behaviour outside offline mode.
+        temporary_path = download_file_path + '.download'
+        try:
+            with urllib.request.urlopen(url) as request:
+                total = int(request.headers.get('Content-Length', 0))
+                with tqdm(total=total, desc='Downloading', unit='B',
+                          unit_scale=True, unit_divisor=1024) as progress:
+                    with open(temporary_path, 'wb') as output:
+                        while True:
+                            data = request.read(1024 * 1024)
+                            if not data:
+                                break
+                            output.write(data)
+                            progress.update(len(data))
+            if os.path.getsize(temporary_path) == 0:
+                raise RuntimeError(f'Downloaded empty model: {url}')
+            os.replace(temporary_path, download_file_path)
+        finally:
+            if os.path.exists(temporary_path):
+                os.remove(temporary_path)
 
 
 def resolve_relative_path(path: str) -> str:
