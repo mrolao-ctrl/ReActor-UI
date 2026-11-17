@@ -11,13 +11,11 @@ import os
 from pathlib import Path
 import subprocess
 
-import cv2
 from tqdm import tqdm
 
 import modules.globals
 from modules.frame_io import read_image, write_frame
 from modules.frame_recovery import png_is_readable
-from modules.processors.frame import face_enhancer, face_swapper
 
 
 def input_sequence(folder: str) -> tuple:
@@ -33,9 +31,8 @@ def input_sequence(folder: str) -> tuple:
             names[index] = path
     if not names:
         raise RuntimeError(f'No numbered PNG frames in {directory}')
-    # ReActor and the FFmpeg assembler use the conventional 0001.png start.
-    if 1 not in names:
-        raise RuntimeError('Frames must be numbered from 0001.png (frame 1).')
+    # If 0001.png is absent, recover it from the nearest readable PNG.
+    # FFmpeg still receives a complete 1..N sequence.
     count = max(names)
     valid = {}
     for number, path in tqdm(sorted(names.items()), desc='Checking input PNGs',
@@ -181,6 +178,8 @@ def run_existing_frames(
         raise ValueError('Existing frames mode requires a .mp4 output path')
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be between 1 and 120')
+
+    from modules.processors.frame import face_enhancer, face_swapper
 
     input_paths, repairs = input_sequence(frames_folder)
     if not modules.globals.face_assignments and not modules.globals.source_path:
