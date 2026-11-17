@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 # single thread doubles cuda performance - needs to be set before torch import
 if any(arg.startswith('--execution-provider') for arg in sys.argv):
     os.environ['OMP_NUM_THREADS'] = '1'
@@ -19,7 +20,9 @@ import modules.globals
 import modules.metadata
 import modules.ui as ui
 from modules.processors.frame.core import get_frame_processors_modules
-from modules.utilities import has_image_extension, is_image, is_video, detect_fps, create_video, extract_frames, get_temp_frame_paths, restore_audio, create_temp, move_temp, clean_temp, normalize_output_path
+from modules.frame_recovery import expected_frame_paths, repair_frames
+from modules.capturer import get_video_frame_total
+from modules.utilities import has_image_extension, is_image, is_video, detect_fps, create_video, extract_frames, get_temp_frame_paths, get_temp_directory_path, restore_audio, create_temp, move_temp, clean_temp, normalize_output_path
 
 if 'ROCMExecutionProvider' in modules.globals.execution_providers:
     del torch
@@ -41,6 +44,8 @@ def parse_args() -> None:
     program.add_argument('--many-faces', help='process every face', dest='many_faces', action='store_true', default=False)
     program.add_argument('--video-encoder', help='adjust output video encoder', dest='video_encoder', default='libx264', choices=['libx264', 'libx265', 'libvpx-vp9'])
     program.add_argument('--video-quality', help='adjust output video quality', dest='video_quality', type=int, default=18, choices=range(52), metavar='[0-51]')
+    program.add_argument('--enhancer-strength', help='GFPGAN blend strength 0..100', dest='enhancer_strength', type=int, default=40, choices=range(101))
+    program.add_argument('--enhancer-mode', help='face restoration method', dest='enhancer_mode', choices=['gfpgan', 'sharpen'], default='gfpgan')
     program.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=suggest_max_memory())
     program.add_argument('--execution-provider', help='execution provider', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
     program.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=suggest_execution_threads())
@@ -65,6 +70,8 @@ def parse_args() -> None:
     modules.globals.many_faces = args.many_faces
     modules.globals.video_encoder = args.video_encoder
     modules.globals.video_quality = args.video_quality
+    modules.globals.enhancer_strength = args.enhancer_strength
+    modules.globals.enhancer_mode = 'Sharpen only' if args.enhancer_mode == 'sharpen' else 'GFPGAN'
     modules.globals.max_memory = args.max_memory
     modules.globals.execution_providers = decode_execution_providers(args.execution_provider)
     modules.globals.execution_threads = args.execution_threads
@@ -167,6 +174,9 @@ def update_status(message: str, scope: str = 'REACTOR.CORE') -> None:
 
 
 def start() -> None:
+    modules.globals.frame_target_boxes.clear()
+    modules.globals.preview_face_boxes = []
+    modules.globals.frame_recovery_log.clear()
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
         if not frame_processor.pre_start():
             return
@@ -195,10 +205,13 @@ def start() -> None:
     create_temp(modules.globals.target_path)
     update_status('Extracting frames...')
     extract_frames(modules.globals.target_path)
-    temp_frame_paths = get_temp_frame_paths(modules.globals.target_path)
+    temp_dir = get_temp_directory_path(modules.globals.target_path)
+    temp_frame_paths = expected_frame_paths(temp_dir, get_video_frame_total(modules.globals.target_path))
+    repair_frames(temp_frame_paths, 'extraction')
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
         update_status('Progressing...', frame_processor.NAME)
         frame_processor.process_video(modules.globals.source_path, temp_frame_paths)
+        repair_frames(temp_frame_paths, frame_processor.NAME)
         release_resources()
     # handles fps
     if modules.globals.keep_fps:
@@ -218,12 +231,31 @@ def start() -> None:
         restore_audio(modules.globals.target_path, modules.globals.output_path)
     else:
         move_temp(modules.globals.target_path, modules.globals.output_path)
-    # clean and validate
+    # Validate the actual output before removing any temporary frames.
+    if not is_video(modules.globals.output_path) or os.path.getsize(modules.globals.output_path) == 0:
+        raise RuntimeError(
+            'No valid output video was produced. Temporary frames have been '
+            'preserved for diagnosis; check the preceding errors.'
+        )
+    # The output MP4 is assembled before temporary frames are removed.
+    if modules.globals.frame_recovery_log:
+        report_path = modules.globals.output_path + '.recovery.json'
+        with open(report_path, 'w', encoding='utf-8') as report:
+            json.dump({
+                'warning': (
+                    'Frames were duplicated from nearby frames. Some may not '
+                    'contain a successful face swap. Check this video visually '
+                    'before using it to hide identities.'
+                ),
+                'recovered_frame_count': len(modules.globals.frame_recovery_log),
+                'frames': modules.globals.frame_recovery_log,
+            }, report, indent=2)
+        update_status(
+            f'Video exported with {len(modules.globals.frame_recovery_log)} '
+            f'frame repair(s). Inspect {report_path}'
+        )
     clean_temp(modules.globals.target_path)
-    if is_video(modules.globals.target_path):
-        update_status('Processing to video succeed!')
-    else:
-        update_status('Processing to video failed!')
+    update_status('Processing to video succeed!')
 
 
 def destroy() -> None:

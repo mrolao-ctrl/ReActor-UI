@@ -17,6 +17,18 @@ keep_fps = None
 keep_audio = None
 keep_frames = None
 many_faces = None
+# Unit-length reference embedding for the target person selected in the UI.
+# None means the original leftmost-face selection remains in effect.
+target_face_embedding = None
+
+# Strength 0..100 blends GFPGAN with the unenhanced face-swap output.
+enhancer_strength = 40
+enhancer_mode = 'GFPGAN'  # or 'Sharpen only'
+# Face boxes are recorded before swapping, because swapping changes identity.
+# Keys are absolute paths of extracted PNG frames.
+frame_target_boxes = {}
+preview_face_boxes = []
+frame_recovery_log = []
 video_encoder = None
 video_quality = None
 max_memory = None

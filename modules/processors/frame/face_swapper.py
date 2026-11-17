@@ -1,4 +1,5 @@
 from typing import Any, List
+import os
 import cv2
 import insightface
 import threading
@@ -7,6 +8,8 @@ import modules.globals
 import modules.processors.frame.core
 from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces
+from modules.face_selector import select_matching_face
+from modules.frame_io import read_image, write_frame, UnreadableFrameError
 from modules.typing import Face, Frame
 from modules.utilities import conditional_download, resolve_relative_path, is_image, is_video
 
@@ -17,7 +20,7 @@ NAME = 'REACTOR.FACE-SWAPPER'
 
 def pre_check() -> bool:
     download_directory_path = resolve_relative_path('../models')
-    conditional_download(download_directory_path, ['https://github.com/facefusion/facefusion-assets/releases/download/models/inswapper_128.onnx'])
+    conditional_download(download_directory_path, ['https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/inswapper_128.onnx'])
     return True
 
 
@@ -25,13 +28,25 @@ def pre_start() -> bool:
     if not is_image(modules.globals.source_path):
         update_status('Select an image for source path.', NAME)
         return False
-    elif not get_one_face(cv2.imread(modules.globals.source_path)):
-        update_status('No face in source path detected.', NAME)
+    try:
+        if load_source_face(modules.globals.source_path) is None:
+            update_status('No face in source path detected.', NAME)
+            return False
+    except RuntimeError as error:
+        update_status(str(error), NAME)
         return False
     if not is_image(modules.globals.target_path) and not is_video(modules.globals.target_path):
         update_status('Select an image or video for target path.', NAME)
         return False
     return True
+
+
+def load_source_face(source_path: str) -> Face:
+    image = read_image(source_path, 'reference face photo')
+    source_face = get_one_face(image)
+    if source_face is None:
+        raise RuntimeError(f'No face detected in reference photo: {source_path}')
+    return source_face
 
 
 def get_face_swapper() -> Any:
@@ -48,39 +63,53 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
     return get_face_swapper().get(temp_frame, target_face, source_face, paste_back=True)
 
 
-def process_frame(source_face: Face, temp_frame: Frame) -> Frame:
-    if modules.globals.many_faces:
-        many_faces = get_many_faces(temp_frame)
-        if many_faces:
-            for target_face in many_faces:
-                temp_frame = swap_face(source_face, target_face, temp_frame)
+def process_frame(source_face: Face, temp_frame: Frame, frame_path=None) -> Frame:
+    # Record selected face coordinates BEFORE the swap changes the identity.
+    if modules.globals.target_face_embedding is not None:
+        chosen = select_matching_face(
+            get_many_faces(temp_frame), modules.globals.target_face_embedding
+        )
+        targets = [chosen] if chosen is not None else []
+    elif modules.globals.many_faces:
+        targets = get_many_faces(temp_frame) or []
     else:
-        target_face = get_one_face(temp_frame)
-        if target_face:
-            temp_frame = swap_face(source_face, target_face, temp_frame)
+        chosen = get_one_face(temp_frame)
+        targets = [chosen] if chosen is not None else []
+
+    boxes = [tuple(map(float, face.bbox)) for face in targets]
+    for target_face in targets:
+        temp_frame = swap_face(source_face, target_face, temp_frame)
+
+    if frame_path is None:
+        modules.globals.preview_face_boxes = boxes
+    else:
+        modules.globals.frame_target_boxes[os.path.abspath(frame_path)] = boxes
     return temp_frame
 
 
-def process_frames(source_path: str, temp_frame_paths: List[str], progress: Any = None) -> None:
-    source_face = get_one_face(cv2.imread(source_path))
+def process_frames(source_face: Face, temp_frame_paths: List[str], progress: Any = None) -> None:
     for temp_frame_path in temp_frame_paths:
-        temp_frame = cv2.imread(temp_frame_path)
         try:
-            result = process_frame(source_face, temp_frame)
-            cv2.imwrite(temp_frame_path, result)
-        except Exception as exception:
-            print(exception)
-            pass
+            temp_frame = read_image(temp_frame_path, 'extracted video frame')
+        except UnreadableFrameError as error:
+            print(f'[REACTOR.RECOVERY] Will restore unreadable frame after this stage: {error}')
+            if progress:
+                progress.update(1)
+            continue
+        result = process_frame(source_face, temp_frame, frame_path=temp_frame_path)
+        write_frame(temp_frame_path, result)
         if progress:
             progress.update(1)
 
 
 def process_image(source_path: str, target_path: str, output_path: str) -> None:
-    source_face = get_one_face(cv2.imread(source_path))
-    target_frame = cv2.imread(target_path)
+    source_face = load_source_face(source_path)
+    target_frame = read_image(target_path, 'target image')
     result = process_frame(source_face, target_frame)
-    cv2.imwrite(output_path, result)
+    if not cv2.imwrite(output_path, result):
+        raise RuntimeError(f'Could not write image: {output_path}')
 
 
 def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
-    modules.processors.frame.core.process_video(source_path, temp_frame_paths, process_frames)
+    source_face = load_source_face(source_path)
+    modules.processors.frame.core.process_video(source_face, temp_frame_paths, process_frames)
