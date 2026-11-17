@@ -87,8 +87,9 @@ def match_distinct_faces(
     for _, i, j in proposals:
         if j not in used:
             used.add(j)
-            matched.append((assignments[i], detections[j]))
-    return matched
+            matched.append((i, assignments[i], detections[j]))
+    # Respect assignment order for predictable compositing.
+    return [(assignment, face) for _, assignment, face in sorted(matched, key=lambda item: item[0])]
 
 
 def swap_assigned_faces(
