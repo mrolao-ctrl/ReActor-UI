@@ -26,6 +26,38 @@ This is an additional CPU inference per swapped face, and another inference
 per enhanced face. On a low-power laptop, it can slow processing considerably.
 Test a short, ordinary non-explicit clip first.
 
+## Landmark alignment (microphones / lower-face occlusions)
+
+The XSeg model receives a **256×256 aligned BGR face crop**, not facial
+landmark coordinates. We use InsightFace's eye/nose/mouth landmarks only
+to align the image before ONNX inference.
+
+A **Landmarks** selector is shown beside the XSeg switch:
+
+- **Auto (default)**: first verify the two eyes and nose, then check
+  that the two mouth points have plausible geometry in the aligned crop.
+  If they do, align with all five points. Otherwise align using **only
+  the eyes and nose**.
+- **3-point**: always align from left eye, right eye and nose.
+  Mouth landmarks are ignored, even if present. Particularly useful
+  for testing a karaoke microphone in front of the mouth.
+- **5-point**: use all five landmarks, as the original implementation
+  did. Requires all five finite points.
+
+On the command line, add `--occlusion-protection
+--occlusion-landmarks 3-point` (or `auto` / `5-point`).
+
+**Limits:** Geometry alone cannot reveal an occluded mouth if a detector
+guesses convincing mouth positions. Auto is a heuristic, not an occlusion
+classifier. Three points may align a face even when the mouth is hidden,
+but they cannot make InsightFace detect an otherwise undetectable face.
+Use a short ordinary non-explicit video to inspect the output.
+
+For **existing PNG resume**, the landmark mode is included in the
+fingerprint, so previously processed frames will not be silently mixed
+with frames from a new mode. Choose a **new output filename** to compare
+different modes without touching original PNGs.
+
 ## Using the UI
 
 - Choose your video or existing PNGs and source/reference photo(s).

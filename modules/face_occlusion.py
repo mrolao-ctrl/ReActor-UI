@@ -32,6 +32,8 @@ LANDMARK_TEMPLATE = np.array([
     [0.38710391, 0.72160547],
     [0.61507734, 0.72034453],
 ], dtype=np.float32) * MODEL_SIZE
+LANDMARK_TEMPLATE_3 = LANDMARK_TEMPLATE[:3].copy()
+LANDMARK_MODES = ('auto', '3-point', '5-point')
 
 _MODEL_SESSION = None
 _MODEL_LOCK = threading.Lock()
@@ -66,7 +68,96 @@ def get_occluder_session() -> Any:
     return _MODEL_SESSION
 
 
-def get_visibility_mask(frame: np.ndarray, face: Any) -> np.ndarray:
+def _upper_face_is_valid(points: np.ndarray) -> bool:
+    """Check three non-collinear eye/nose points before estimating alignment."""
+    if points.shape != (3, 2) or not np.isfinite(points).all():
+        return False
+    eye_vector = points[1] - points[0]
+    eye_length_sq = float(np.dot(eye_vector, eye_vector))
+    if eye_length_sq < 16.0:  # At least 4 pixels between the eyes.
+        return False
+    nose_vector = points[2] - points[0]
+    cross = float(
+        eye_vector[0] * nose_vector[1] -
+        eye_vector[1] * nose_vector[0]
+    )
+    nose_height_ratio = abs(cross) / eye_length_sq
+    nose_horizontal_ratio = float(np.dot(nose_vector, eye_vector)) / eye_length_sq
+    return (0.10 <= nose_height_ratio <= 1.5 and
+            -0.6 <= nose_horizontal_ratio <= 1.6)
+
+
+def _mouth_geometry_reliable(points: np.ndarray, upper_matrix: np.ndarray) -> bool:
+    """A geometry-only sanity check, NOT a mouth visibility classifier.
+
+    A microphone may hide the mouth while a detector still guesses plausible
+    coordinates. In that case select 3-point explicitly for the best test.
+    """
+    if points.shape != (5, 2) or not np.isfinite(points[3:]).all():
+        return False
+    mouth = cv2.transform(points[3:][None, :, :], upper_matrix)[0]
+    reference = LANDMARK_TEMPLATE[3:]
+    target_mouth_width = float(np.linalg.norm(reference[1] - reference[0]))
+    mouth_width = float(np.linalg.norm(mouth[1] - mouth[0]))
+    # Rule out collapsed, wildly exaggerated, inverted or displaced mouths.
+    if not 0.3 * target_mouth_width <= mouth_width <= 1.7 * target_mouth_width:
+        return False
+    if np.any(mouth[:, 1] <= LANDMARK_TEMPLATE[2, 1] + 8.0):
+        return False
+    return float(np.max(np.linalg.norm(mouth - reference, axis=1))) <= 36.0
+
+
+def estimate_alignment_matrix(landmarks: np.ndarray, mode: str = 'auto') -> tuple:
+    """Build a similarity transform to a 256px crop; return (matrix, mode used).
+
+    3-point requires eyes and nose, 5-point requires all facial landmarks.
+    Auto checks lower-face landmark geometry and falls back to three points.
+    This does not recover missing face detections or reliably detect occlusion.
+    """
+    if mode not in LANDMARK_MODES:
+        raise ValueError(f'Invalid occlusion landmark mode: {mode}')
+    points = np.asarray(landmarks, dtype=np.float32)
+    if points.shape not in ((3, 2), (5, 2)):
+        raise ValueError('Expected three or five facial landmark points')
+    if not _upper_face_is_valid(points[:3]):
+        raise ValueError('Eye/nose landmarks are missing or unreliable')
+    if mode == '5-point' and (points.shape != (5, 2) or
+                               not np.isfinite(points).all()):
+        raise ValueError('5-point mode requires all five valid facial landmarks')
+
+    upper_matrix, _ = cv2.estimateAffinePartial2D(
+        points[:3], LANDMARK_TEMPLATE_3, method=cv2.LMEDS
+    )
+    if upper_matrix is None or not np.isfinite(upper_matrix).all():
+        raise ValueError('Could not align the visible upper face')
+
+    # Refuse a severely inconsistent 3-point fit; it may have matched only two.
+    projected = cv2.transform(points[:3][None, :, :], upper_matrix)[0]
+    residuals = np.linalg.norm(projected - LANDMARK_TEMPLATE_3, axis=1)
+    if float(np.max(residuals)) > 18.0:
+        raise ValueError('Upper face landmarks cannot be aligned reliably')
+
+    if mode == '3-point':
+        return upper_matrix, '3-point'
+
+    use_five = (points.shape == (5, 2) and
+                np.isfinite(points).all() and
+                (mode == '5-point' or
+                 _mouth_geometry_reliable(points, upper_matrix)))
+    if not use_five:
+        return upper_matrix, '3-point'
+
+    matrix, _ = cv2.estimateAffinePartial2D(
+        points, LANDMARK_TEMPLATE, method=cv2.LMEDS
+    )
+    if matrix is None or not np.isfinite(matrix).all():
+        if mode == 'auto':
+            return upper_matrix, '3-point'
+        raise ValueError('Could not align the five facial landmarks')
+    return matrix, '5-point'
+
+
+def get_visibility_mask(frame: np.ndarray, face: Any, mode: str = None) -> np.ndarray:
     """Return float32 0..1 mask of visible (replaceable) face pixels.
 
     Input is the *original* frame, before swapping or enhancing. Visibility
@@ -76,14 +167,11 @@ def get_visibility_mask(frame: np.ndarray, face: Any) -> np.ndarray:
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
         raise ValueError('Expected a BGR video frame')
     landmarks = np.asarray(getattr(face, 'kps', None), dtype=np.float32)
-    if landmarks.shape != (5, 2) or not np.isfinite(landmarks).all():
-        raise ValueError('Cannot align an occluded face without five valid landmarks')
-
-    matrix, _ = cv2.estimateAffinePartial2D(
-        landmarks, LANDMARK_TEMPLATE, method=cv2.LMEDS
-    )
-    if matrix is None or not np.isfinite(matrix).all():
-        raise ValueError('Could not estimate face alignment')
+    if mode is None:
+        mode = modules.globals.occlusion_landmark_mode
+    matrix, used_mode = estimate_alignment_matrix(landmarks, mode)
+    # The aligned crop is what XSeg sees; it never receives landmarks.
+    # In forced 3-point mode, lower-face detector landmarks are ignored.
     aligned = cv2.warpAffine(
         frame, matrix, (MODEL_SIZE, MODEL_SIZE),
         flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101
