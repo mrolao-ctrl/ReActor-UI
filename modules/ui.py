@@ -269,11 +269,88 @@ def compare_enhancer() -> None:
         ctk.CTkLabel(comparison, text=f'Comparison failed: {error}', wraplength=850).pack(pady=20)
 
 
+def update_assignments_label() -> None:
+    if assignments_label is not None:
+        count = len(modules.globals.face_assignments)
+        assignments_label.configure(
+            text=f'Mapped people: {count}' if count else
+            'Mapped people: 0 (legacy single-face mode)'
+        )
+
+
+def clear_assignments() -> None:
+    modules.globals.face_assignments.clear()
+    update_assignments_label()
+    update_status('All additional person assignments cleared.')
+
+
+def select_frames_directory() -> None:
+    """Use only local PNG files; do not require a corresponding video."""
+    global FRAMES_PREVIEW_PATHS
+    folder = ctk.filedialog.askdirectory(
+        title='Choose an existing numbered PNG frames folder',
+        initialdir=RECENT_DIRECTORY_TARGET
+    )
+    if not folder:
+        return
+    paths = sorted(
+        (p for p in Path(folder).glob('*.png')
+         if p.stem.isdigit() and int(p.stem) >= 1),
+        key=lambda p: int(p.stem)
+    )
+    if not paths:
+        update_status('This folder contains no numbered PNG frames.')
+        return
+    first = next((str(path) for path in paths if cv2.imread(str(path)) is not None), None)
+    if first is None:
+        update_status('No readable PNG found in selected folder.')
+        return
+    PREVIEW.withdraw()
+    FRAMES_PREVIEW_PATHS = [str(p) for p in paths]
+    modules.globals.frames_directory = folder
+    modules.globals.target_path = None
+    modules.globals.target_face_embedding = None
+    modules.globals.face_assignments.clear()
+    update_assignments_label()
+    image = render_image_preview(first, (200, 200))
+    target_label.configure(
+        image=image, text=f'{Path(folder).name} — {len(paths)} PNGs',
+        compound='top'
+    )
+    update_status(
+        'Existing frames selected. Choose each person + source image, '
+        'then Start. Output is silent MP4; input PNGs remain unchanged.'
+    )
+
+
+def preview_target_count() -> int:
+    if modules.globals.frames_directory:
+        return len(FRAMES_PREVIEW_PATHS)
+    if is_video(modules.globals.target_path):
+        return get_video_frame_total(modules.globals.target_path)
+    return 1 if is_image(modules.globals.target_path) else 0
+
+
+def preview_target_frame(index: int):
+    if modules.globals.frames_directory:
+        if not FRAMES_PREVIEW_PATHS:
+            return None
+        path = FRAMES_PREVIEW_PATHS[max(0, min(index, len(FRAMES_PREVIEW_PATHS) - 1))]
+        return cv2.imread(path)
+    if is_video(modules.globals.target_path):
+        return get_video_frame(modules.globals.target_path, max(1, index + 1))
+    if is_image(modules.globals.target_path):
+        return cv2.imread(modules.globals.target_path)
+    return None
+
+
 def set_many_faces(enabled: bool) -> None:
     modules.globals.many_faces = enabled
     if enabled:
         modules.globals.target_face_embedding = None
-        update_status('Many faces enabled: individual person selection cleared.')
+        modules.globals.face_assignments.clear()
+        update_assignments_label()
+        update_status('Many faces enabled: individual mappings cleared.')
 
 
 def select_source_path() -> None:
@@ -292,12 +369,18 @@ def select_source_path() -> None:
 
 
 def select_target_path() -> None:
-    global RECENT_DIRECTORY_TARGET, img_ft, vid_ft
+    global RECENT_DIRECTORY_TARGET, FRAMES_PREVIEW_PATHS, img_ft, vid_ft
 
-    PREVIEW.withdraw()
-    # An identity selected for a previous video must never carry over.
-    modules.globals.target_face_embedding = None
     target_path = ctk.filedialog.askopenfilename(title='select an target image or video', initialdir=RECENT_DIRECTORY_TARGET, filetypes=[img_ft, vid_ft])
+    if not target_path:
+        return
+    PREVIEW.withdraw()
+    # Selections for an earlier target must never carry over.
+    modules.globals.target_face_embedding = None
+    modules.globals.frames_directory = None
+    FRAMES_PREVIEW_PATHS = []
+    modules.globals.face_assignments.clear()
+    update_assignments_label()
     if is_image(target_path):
         modules.globals.target_path = target_path
         RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
@@ -313,19 +396,19 @@ def select_target_path() -> None:
         target_label.configure(image=None)
 
 
-def open_face_picker() -> None:
+def open_face_picker(multiple: bool = False) -> None:
     """Select a face on an original video frame and remember its identity.
 
     All detection happens on the local machine. The selected embedding remains
     in RAM, and frames that cannot be matched confidently are left untouched.
     """
     target_path = modules.globals.target_path
-    if not target_path or not (is_image(target_path) or is_video(target_path)):
-        update_status('Select a target image or video first.')
+    if not modules.globals.frames_directory and not (is_image(target_path) or is_video(target_path)):
+        update_status('Select a target video, image, or PNG frames folder first.')
         return
 
     picker = ctk.CTkToplevel(ROOT)
-    picker.title('Choose the person to replace')
+    picker.title('Add person + reference photo' if multiple else 'Choose the person to replace')
     picker.geometry('900x720')
     picker.minsize(650, 650)
 
@@ -347,25 +430,21 @@ def open_face_picker() -> None:
     feedback.pack(padx=12, pady=5)
 
     state = {'faces': [], 'boxes': [], 'display_size': (0, 0)}
-    total_frames = get_video_frame_total(target_path) if is_video(target_path) else 1
+    total_frames = preview_target_count()
     max_frame_index = max(0, total_frames - 1)
     frame_slider = ctk.CTkSlider(
         picker, from_=0, to=max(1, max_frame_index),
         number_of_steps=max(1, max_frame_index)
     )
     frame_slider.set(min(max_frame_index, 30))
-    if is_video(target_path):
+    if total_frames > 1:
         frame_slider.pack(fill='x', padx=30, pady=(5, 3))
 
     def load_frame() -> None:
-        frame_index = int(round(frame_slider.get())) if is_video(target_path) else 0
+        frame_index = int(round(frame_slider.get())) if total_frames > 1 else 0
         feedback.configure(text=f'Detecting faces in frame {frame_index + 1}...')
         picker.update_idletasks()
-        if is_video(target_path):
-            # capturer.get_video_frame expects a one-based frame number.
-            frame = get_video_frame(target_path, frame_index + 1)
-        else:
-            frame = cv2.imread(target_path)
+        frame = preview_target_frame(frame_index)
         if frame is None:
             feedback.configure(text='Could not read this frame. Try another one.')
             return
@@ -409,24 +488,59 @@ def open_face_picker() -> None:
                 if embedding is None:
                     feedback.configure(text='No identity embedding found. Choose another frame.')
                     return
-                modules.globals.target_face_embedding = embedding.copy()
-                modules.globals.many_faces = False
-                many_faces_switch.deselect()
-                update_status('Person selected: only that identity will be face-swapped.')
+                if multiple:
+                    photo = ctk.filedialog.askopenfilename(
+                        title='Select the source photo for this person',
+                        initialdir=RECENT_DIRECTORY_SOURCE,
+                        filetypes=[img_ft]
+                    )
+                    if not is_image(photo):
+                        feedback.configure(text='Choose a valid source photo to add the person.')
+                        return
+                    for current in modules.globals.face_assignments:
+                        score = float(embedding @ current['embedding'])
+                        if score > 0.92:
+                            feedback.configure(
+                                text='This person is already mapped. Choose another person '
+                                     'or clear existing assignments.'
+                            )
+                            return
+                    modules.globals.face_assignments.append({
+                        'embedding': embedding.copy(),
+                        'source_path': photo
+                    })
+                    modules.globals.target_face_embedding = None
+                    modules.globals.many_faces = False
+                    many_faces_switch.deselect()
+                    update_assignments_label()
+                    update_status(
+                        f'{len(modules.globals.face_assignments)} person(s) mapped to source photos.'
+                    )
+                else:
+                    modules.globals.face_assignments.clear()
+                    update_assignments_label()
+                    modules.globals.target_face_embedding = embedding.copy()
+                    modules.globals.many_faces = False
+                    many_faces_switch.deselect()
+                    update_status('Single person selected: only that identity will be swapped.')
                 picker.destroy()
                 return
         feedback.configure(text='Click inside one of the highlighted face rectangles.')
 
     def clear_selection() -> None:
-        modules.globals.target_face_embedding = None
-        update_status('Person selection cleared: original leftmost-face mode.')
+        if not multiple:
+            modules.globals.target_face_embedding = None
+            update_status('Person selection cleared: original leftmost-face mode.')
+        else:
+            update_status('Cancelled; existing assignments were preserved.')
         picker.destroy()
 
     preview.bind('<Button-1>', choose_face)
     actions = ctk.CTkFrame(picker)
     actions.pack(pady=(5, 12))
     ctk.CTkButton(actions, text='Load frame', command=load_frame).pack(side='left', padx=6, pady=5)
-    ctk.CTkButton(actions, text='Clear selection', command=clear_selection).pack(side='left', padx=6, pady=5)
+    ctk.CTkButton(actions, text='Clear selection' if not multiple else 'Close',
+                  command=clear_selection).pack(side='left', padx=6, pady=5)
     ctk.CTkButton(actions, text='Cancel', command=picker.destroy).pack(side='left', padx=6, pady=5)
 
     load_frame()
@@ -435,7 +549,22 @@ def open_face_picker() -> None:
 def select_output_path(start: Callable[[], None]) -> None:
     global RECENT_DIRECTORY_OUTPUT, img_ft, vid_ft
 
-    if is_image(modules.globals.target_path):
+    if modules.globals.frames_directory:
+        try:
+            value = float(frames_fps_entry.get().replace(',', '.'))
+            if not 1 <= value <= 120:
+                raise ValueError()
+            modules.globals.frames_fps = value
+        except (TypeError, ValueError):
+            update_status('Existing frames FPS must be between 1 and 120.')
+            return
+        output_path = ctk.filedialog.asksaveasfilename(
+            title='Output MP4 (reusable for resume)',
+            filetypes=[('MP4 video', '*.mp4')], defaultextension='.mp4',
+            initialfile=Path(modules.globals.frames_directory).name + '_edited.mp4',
+            initialdir=RECENT_DIRECTORY_OUTPUT
+        )
+    elif is_image(modules.globals.target_path):
         output_path = ctk.filedialog.asksaveasfilename(title='save image output file', filetypes=[img_ft], defaultextension='.png', initialfile='output.png', initialdir=RECENT_DIRECTORY_OUTPUT)
     elif is_video(modules.globals.target_path):
         output_path = ctk.filedialog.asksaveasfilename(title='save video output file', filetypes=[vid_ft], defaultextension='.mp4', initialfile='output.mp4', initialdir=RECENT_DIRECTORY_OUTPUT)
