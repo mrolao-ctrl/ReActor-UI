@@ -311,6 +311,8 @@ def select_frames_directory() -> None:
     FRAMES_PREVIEW_PATHS = [str(p) for p in paths]
     modules.globals.frames_directory = folder
     modules.globals.target_path = None
+    modules.globals.source_path = None
+    source_label.configure(image=None, text='Source face')
     modules.globals.target_face_embedding = None
     modules.globals.face_assignments.clear()
     update_assignments_label()
