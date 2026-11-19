@@ -385,6 +385,184 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     return root
 
 
+def open_settings() -> None:
+    """Edit persistent defaults; existing media and identity mappings stay in RAM."""
+    if _processing_active:
+        update_status('Finish the current processing job before changing Settings.')
+        return
+
+    dialog = ctk.CTkToplevel(ROOT)
+    dialog.title('ReActor Studio · Settings')
+    dialog.geometry('680x700')
+    dialog.minsize(580, 540)
+    _bring_dialog_to_front(dialog)
+
+    ctk.CTkLabel(
+        dialog, text='Application settings',
+        font=ctk.CTkFont(size=24, weight='bold'), anchor='w'
+    ).pack(fill='x', padx=24, pady=(20, 2))
+    ctk.CTkLabel(
+        dialog, text='Saved in your Windows profile; retained after app updates.',
+        text_color=('gray42', 'gray72'), anchor='w'
+    ).pack(fill='x', padx=24, pady=(0, 12))
+
+    content = ctk.CTkScrollableFrame(dialog, fg_color='transparent')
+    content.pack(fill='both', expand=True, padx=18, pady=(0, 8))
+    content.grid_columnconfigure(1, weight=1)
+
+    # Workstation defaults are deliberately CPU / 2 threads / 6 GB / quality 10.
+    current = load_settings()
+    current.update({
+        'keep_fps': bool(modules.globals.keep_fps),
+        'keep_audio': bool(modules.globals.keep_audio),
+        'keep_frames': bool(modules.globals.keep_frames),
+        'occlusion_protection': bool(modules.globals.occlusion_protection),
+        'occlusion_landmark_mode': modules.globals.occlusion_landmark_mode,
+        'enhancer_enabled': bool(modules.globals.fp_ui.get('face_enhancer', False)),
+        'enhancer_mode': modules.globals.enhancer_mode,
+        'enhancer_strength': modules.globals.enhancer_strength,
+        'models_directory': modules.globals.models_directory or recommended_models_directory(),
+    })
+    entries = {}
+
+    def add_entry(row: int, title: str, value, options=None):
+        ctk.CTkLabel(content, text=title, anchor='w').grid(
+            row=row, column=0, padx=(8, 18), pady=11, sticky='w'
+        )
+        if options is None:
+            field = ctk.CTkEntry(content, width=240)
+            field.insert(0, str(value))
+        else:
+            field = ctk.CTkOptionMenu(content, values=options)
+            field.set(str(value))
+        field.grid(row=row, column=1, padx=(4, 8), pady=11, sticky='ew')
+        return field
+
+    # Show only providers available in this installed ONNX Runtime.
+    import onnxruntime
+    provider_map = {
+        'CPUExecutionProvider': 'cpu',
+        'CUDAExecutionProvider': 'cuda',
+        'DmlExecutionProvider': 'dml',
+        'ROCMExecutionProvider': 'rocm',
+        'CoreMLExecutionProvider': 'coreml'
+    }
+    providers = list(dict.fromkeys(
+        ['cpu'] + [provider_map[p] for p in onnxruntime.get_available_providers()
+                   if p in provider_map]
+    ))
+    provider = current.get('execution_provider', 'cpu')
+    if provider not in providers:
+        provider = 'cpu'
+
+    ctk.CTkLabel(
+        content, text='PERFORMANCE',
+        font=ctk.CTkFont(size=14, weight='bold'), anchor='w'
+    ).grid(row=0, column=0, columnspan=2, pady=(8, 3), sticky='ew')
+
+    entries['execution_provider'] = add_entry(1, 'Execution provider', provider, providers)
+    entries['execution_threads'] = add_entry(
+        2, 'Processing threads', modules.globals.execution_threads or current['execution_threads']
+    )
+    entries['max_memory'] = add_entry(
+        3, 'Maximum memory (GB)', modules.globals.max_memory or current['max_memory']
+    )
+    entries['video_quality'] = add_entry(
+        4, 'Video quality CRF (0–51)', modules.globals.video_quality
+        if modules.globals.video_quality is not None else current['video_quality']
+    )
+    entries['video_encoder'] = add_entry(
+        5, 'Video encoder', modules.globals.video_encoder or current['video_encoder'],
+        ['libx264', 'libx265', 'libvpx-vp9']
+    )
+
+    ctk.CTkLabel(
+        content, text='OFFLINE MODELS',
+        font=ctk.CTkFont(size=14, weight='bold'), anchor='w'
+    ).grid(row=6, column=0, columnspan=2, pady=(12, 3), sticky='ew')
+    model_label = ctk.CTkLabel(content, text='Models folder', anchor='w')
+    model_label.grid(row=7, column=0, padx=(8, 18), pady=11, sticky='w')
+    folder = ctk.CTkFrame(content, fg_color='transparent')
+    folder.grid(row=7, column=1, padx=(4, 8), pady=11, sticky='ew')
+    folder.grid_columnconfigure(0, weight=1)
+    entries['models_directory'] = ctk.CTkEntry(folder)
+    entries['models_directory'].insert(0, current['models_directory'])
+    entries['models_directory'].grid(row=0, column=0, padx=(0, 6), sticky='ew')
+
+    def browse_models():
+        selected = ctk.filedialog.askdirectory(
+            parent=dialog, title='Choose folder containing your existing ONNX models'
+        )
+        if selected:
+            entries['models_directory'].delete(0, 'end')
+            entries['models_directory'].insert(0, selected)
+
+    ctk.CTkButton(
+        folder, text='Browse', width=75, command=browse_models
+    ).grid(row=0, column=1, sticky='e')
+
+    ctk.CTkLabel(
+        content,
+        text='Reuse models/inswapper_128.onnx and models/xseg_1.onnx from '
+             'your previous installation. Other InsightFace weights remain in '
+             'your user profile. Models are not included in the installer.',
+        wraplength=560, justify='left', text_color=('gray40', 'gray70')
+    ).grid(row=8, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
+    ctk.CTkLabel(
+        content, text='All current Keep FPS/Audio/Frames, XSeg and Enhancer '
+                      'switches on the main screen are also saved as defaults.',
+        wraplength=560, justify='left', text_color=('gray40', 'gray70')
+    ).grid(row=9, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
+
+    feedback = ctk.CTkLabel(dialog, text='', anchor='w', wraplength=600)
+    feedback.pack(fill='x', padx=24, pady=(0, 8))
+
+    def save():
+        values = dict(current)
+        values.update({key: widget.get() for key, widget in entries.items()})
+        try:
+            values['execution_threads'] = int(values['execution_threads'])
+            values['max_memory'] = int(values['max_memory'])
+            values['video_quality'] = int(values['video_quality'])
+            values['frames_fps'] = float(frames_fps_entry.get().replace(',', '.'))
+        except (ValueError, TypeError):
+            feedback.configure(text='Invalid numeric value (threads, memory, CRF or FPS).')
+            return
+        checked = validate(values)
+        for key in ('execution_threads', 'max_memory', 'video_quality', 'frames_fps'):
+            if checked[key] != values[key]:
+                feedback.configure(text=f'Invalid value for {key}. Check the allowed range.')
+                return
+        if values['models_directory'] and not Path(values['models_directory']).is_dir():
+            feedback.configure(text='Choose an existing models directory.')
+            return
+        try:
+            saved_at = save_settings(checked)
+        except OSError as error:
+            feedback.configure(text=f'Could not save settings: {error}')
+            return
+        # Apply ordinary processing values to subsequent jobs in this session.
+        modules.globals.execution_threads = checked['execution_threads']
+        modules.globals.video_quality = checked['video_quality']
+        modules.globals.video_encoder = checked['video_encoder']
+        modules.globals.models_directory = checked['models_directory']
+        modules.globals.frames_fps = checked['frames_fps']
+        # Provider and memory cap require restart (loaded models/resource limits).
+        update_status(f'Settings saved to {saved_at}. Restart for provider/memory changes.')
+        dialog.destroy()
+
+    bar = ctk.CTkFrame(dialog, fg_color='transparent')
+    bar.pack(fill='x', padx=24, pady=(0, 20))
+    ctk.CTkButton(bar, text='Save defaults', width=180, height=40,
+                  command=save).pack(side='right')
+    ctk.CTkButton(
+        bar, text='Cancel', width=110, height=40,
+        fg_color=('#E8EBE9', '#34413C'),
+        text_color=('#345045', '#EBF6F0'),
+        command=dialog.destroy
+    ).pack(side='right', padx=(0, 10))
+
+
 def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
     global preview_label, preview_slider
 
