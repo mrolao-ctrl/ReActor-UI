@@ -67,6 +67,46 @@ SECONDARY_HOVER = '#2E3D62'
 
 img_ft, vid_ft = modules.globals.file_types
 
+WORKFLOW_TITLES = (
+    '01   SELECT MEDIA',
+    '02   MAP FACES',
+    '03   PROCESSING',
+    '04   OCCLUSION',
+    '05   FACE ENHANCER',
+)
+
+
+def _display_workflow_step(index, cards, tabs, previous_button, next_button,
+                           stage_label, scrollable) -> bool:
+    """Show one existing card at a time without destroying its state."""
+    if not 0 <= index < len(cards):
+        return False
+
+    for position, card in enumerate(cards):
+        if position == index:
+            card.grid()
+        else:
+            card.grid_remove()
+    for position, tab in enumerate(tabs):
+        active = position == index
+        tab.configure(
+            fg_color='#1C2750' if active else '#121B36',
+            hover_color='#283963' if active else SECONDARY_HOVER,
+            border_color=PURPLE if active else BORDER,
+            text_color=TEXT if active else MUTED,
+        )
+    previous_button.configure(state='disabled' if index == 0 else 'normal')
+    next_button.configure(state='disabled' if index == len(cards) - 1 else 'normal')
+    stage_label.configure(
+        text=f'STEP {index + 1} OF {len(cards)}  ·  '
+             f'{WORKFLOW_TITLES[index].split("   ", 1)[1]}'
+    )
+    # Reset scroll to the top for every page change.
+    canvas = getattr(scrollable, '_parent_canvas', None)
+    if canvas is not None:
+        canvas.yview_moveto(0.0)
+    return True
+
 
 def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global ROOT, PREVIEW
@@ -230,25 +270,26 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
                          padx=(12, 24), pady=18, sticky='e')
 
 
-    # Compact GuideMe-style workflow strip; informational, not clickable.
+    # Clickable GuideMe-style workflow navigation.
     steps = ctk.CTkFrame(header, fg_color='transparent', corner_radius=0)
     steps.grid(row=3, column=0, columnspan=3, sticky='ew',
                padx=24, pady=(0, 14))
-    for column, step in enumerate(
-        ('01   SELECT MEDIA', '02   MAP FACES', '03   ENHANCE', '04   EXPORT')
-    ):
-        steps.grid_columnconfigure(column, weight=1)
-        chip = ctk.CTkFrame(
-            steps, fg_color=('#1C2750' if column == 0 else '#121B36'),
-            corner_radius=11, border_width=1,
-            border_color=('#6152D5' if column == 0 else BORDER)
+    workflow_tabs = []
+    active_step = 0
+    for column, step in enumerate(WORKFLOW_TITLES):
+        steps.grid_columnconfigure(column, weight=1, uniform='workflow')
+        chip = ctk.CTkButton(
+            steps, text=step, height=46,
+            fg_color='#121B36', hover_color=SECONDARY_HOVER,
+            text_color=MUTED, corner_radius=11,
+            border_width=1, border_color=BORDER,
+            font=ctk.CTkFont(size=11, weight='bold'),
+            command=lambda index=column: show_step(index)
         )
         chip.grid(row=0, column=column,
-                  padx=(0, 7) if column < 3 else 0, sticky='ew')
-        ctk.CTkLabel(
-            chip, text=step, text_color=('#E9E5FF' if column == 0 else MUTED),
-            font=ctk.CTkFont(size=11, weight='bold')
-        ).pack(padx=7, pady=9)
+                  padx=(0, 7) if column < len(WORKFLOW_TITLES) - 1 else 0,
+                  sticky='ew')
+        workflow_tabs.append(chip)
 
     content = ctk.CTkScrollableFrame(
         root, fg_color='transparent', corner_radius=0
@@ -264,27 +305,10 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     media.grid_columnconfigure(0, weight=1)
     media.grid_columnconfigure(1, weight=1)
 
-    source_card = ctk.CTkFrame(
-        media, fg_color=CARD, corner_radius=16,
-        border_width=1, border_color=BORDER
-    )
-    source_card.grid(row=2, column=0, padx=(18, 8), pady=(0, 18), sticky='nsew')
-    source_card.grid_columnconfigure(0, weight=1)
-    ctk.CTkLabel(
-        source_card, text='SOURCE PHOTO', anchor='w',
-        font=ctk.CTkFont(size=12, weight='bold'),
-        text_color=SUBTLE
-    ).grid(row=0, column=0, padx=15, pady=(12, 3), sticky='ew')
-    source_label = ctk.CTkLabel(
-        source_card, text='Add a person below to select a source photo',
-        height=160, wraplength=280
-    )
-    source_label.grid(row=1, column=0, padx=15, pady=(0, 12), sticky='nsew')
-
     target_card = ctk.CTkFrame(
         media, fg_color=CARD, corner_radius=12
     )
-    target_card.grid(row=2, column=1, padx=(8, 18), pady=(0, 18), sticky='nsew')
+    target_card.grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 18), sticky='nsew')
     target_card.grid_columnconfigure(0, weight=1)
     ctk.CTkLabel(
         target_card, text='TARGET MEDIA', anchor='w',
@@ -292,7 +316,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         text_color=SUBTLE
     ).grid(row=0, column=0, padx=15, pady=(12, 3), sticky='ew')
     target_label = ctk.CTkLabel(
-        target_card, text='No target selected', height=160, wraplength=280
+        target_card, text='No target selected', height=210, wraplength=720
     )
     target_label.grid(row=1, column=0, padx=15, pady=(0, 12), sticky='nsew')
     ctk.CTkButton(
@@ -332,6 +356,23 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     assignments_label.grid(
         row=3, column=0, columnspan=2, padx=22, pady=(0, 16), sticky='ew'
     )
+    source_card = ctk.CTkFrame(
+        people, fg_color=CARD, corner_radius=16,
+        border_width=1, border_color=BORDER
+    )
+    source_card.grid(row=4, column=0, columnspan=2,
+                     padx=20, pady=(0, 18), sticky='ew')
+    source_card.grid_columnconfigure(0, weight=1)
+    ctk.CTkLabel(
+        source_card, text='SOURCE PHOTO  ·  LATEST MAPPED PERSON', anchor='w',
+        font=ctk.CTkFont(size=12, weight='bold'),
+        text_color=SUBTLE
+    ).grid(row=0, column=0, padx=15, pady=(12, 3), sticky='ew')
+    source_label = ctk.CTkLabel(
+        source_card, text='Add a person to select a source photo',
+        height=150, wraplength=700
+    )
+    source_label.grid(row=1, column=0, padx=15, pady=(0, 12), sticky='ew')
     update_assignments_label()
 
     processing = _section(content, '03   OUTPUT & PROCESSING', 'Playback and output options.')
@@ -456,10 +497,43 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         height=38, command=compare_enhancer
     ).grid(row=4, column=0, columnspan=2, padx=22, pady=(0, 20), sticky='ew')
 
+    # Shared Previous/Next controls remain visible on every page.
+    workflow_cards = (media, people, processing, occlusion, enhancer)
+    navigation = ctk.CTkFrame(root, fg_color=BG, corner_radius=0)
+    navigation.grid(row=2, column=0, padx=24, pady=(3, 9), sticky='ew')
+    navigation.grid_columnconfigure(1, weight=1)
+    previous_button = ctk.CTkButton(
+        navigation, text='←  Previous', width=145, height=40,
+        fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+        text_color=TEXT, border_width=1, border_color=BORDER,
+        command=lambda: show_step(active_step - 1)
+    )
+    previous_button.grid(row=0, column=0, sticky='w')
+    stage_label = ctk.CTkLabel(
+        navigation, text='', text_color=MUTED,
+        font=ctk.CTkFont(size=11, weight='bold')
+    )
+    stage_label.grid(row=0, column=1, padx=12, sticky='ew')
+    next_button = ctk.CTkButton(
+        navigation, text='Next  →', width=145, height=40,
+        command=lambda: show_step(active_step + 1)
+    )
+    next_button.grid(row=0, column=2, sticky='e')
+
+    def show_step(index: int) -> None:
+        nonlocal active_step
+        if _display_workflow_step(
+            index, workflow_cards, workflow_tabs, previous_button,
+            next_button, stage_label, content
+        ):
+            active_step = index
+
+    show_step(0)
+
     footer = ctk.CTkFrame(
         root, fg_color='#0B1430', corner_radius=0
     )
-    footer.grid(row=2, column=0, sticky='ew')
+    footer.grid(row=3, column=0, sticky='ew')
     for column in range(3):
         footer.grid_columnconfigure(column, weight=1)
     start_button = ctk.CTkButton(
@@ -980,7 +1054,7 @@ def update_assignments_label() -> None:
             source_label.image = image
         elif not modules.globals.source_path:
             source_label.configure(
-                image=None, text='Add a person below to select a source photo'
+                image=None, text='Add a person to select a source photo'
             )
             source_label.image = None
 
@@ -1018,7 +1092,7 @@ def select_frames_directory() -> None:
     modules.globals.frames_directory = folder
     modules.globals.target_path = None
     modules.globals.source_path = None
-    source_label.configure(image=None, text='Add a person below to select a source photo')
+    source_label.configure(image=None, text='Add a person to select a source photo')
     source_label.image = None
     modules.globals.target_face_embedding = None
     modules.globals.face_assignments.clear()
@@ -1088,8 +1162,8 @@ def select_target_path() -> None:
     global RECENT_DIRECTORY_TARGET, FRAMES_PREVIEW_PATHS, img_ft, vid_ft
 
     target_path = ctk.filedialog.askopenfilename(
-        title='Select target image or video',
-        initialdir=RECENT_DIRECTORY_TARGET, filetypes=[img_ft, vid_ft],
+        title='Select target video or image',
+        initialdir=RECENT_DIRECTORY_TARGET, filetypes=[vid_ft, img_ft],
         parent=ROOT
     )
     if not target_path:
