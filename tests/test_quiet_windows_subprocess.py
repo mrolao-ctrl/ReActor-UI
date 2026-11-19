@@ -2,6 +2,7 @@
 import ast
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -36,16 +37,17 @@ class WindowsQuietSubprocessTests(unittest.TestCase):
         win448 = OSError('The path contains an untrusted mount point')
         win448.winerror = 448
         fake_process = Mock()
-        with patch.object(util.platform, 'system', return_value='Windows'), \
-             patch.object(util.shutil, 'which', return_value='C:/fake/ffmpeg.exe'), \
-             patch.object(util.os.path, 'realpath', return_value='C:/real/ffmpeg.exe'), \
-             patch.dict('os.environ', {'LOCALAPPDATA': str(Path.cwd())}), \
-             patch.object(util.subprocess, 'Popen',
-                          side_effect=[win448, fake_process]) as popen:
-            self.assertIs(fake_process, util._start_ffmpeg(['ffmpeg', '-version']))
-        self.assertEqual(2, popen.call_count)
-        for attempted in popen.call_args_list:
-            self.assertEqual(CREATE_NO_WINDOW, attempted.kwargs['creationflags'])
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(util.platform, 'system', return_value='Windows'), \
+                 patch.object(util.shutil, 'which', return_value='C:/fake/ffmpeg.exe'), \
+                 patch.object(util.os.path, 'realpath', return_value='C:/real/ffmpeg.exe'), \
+                 patch.dict('os.environ', {'LOCALAPPDATA': root}), \
+                 patch.object(util.subprocess, 'Popen',
+                              side_effect=[win448, fake_process]) as popen:
+                self.assertIs(fake_process, util._start_ffmpeg(['ffmpeg', '-version']))
+            self.assertEqual(2, popen.call_count)
+            for attempted in popen.call_args_list:
+                self.assertEqual(CREATE_NO_WINDOW, attempted.kwargs['creationflags'])
 
     def test_non_progress_ffmpeg_check_output_uses_quiet_flags(self):
         with patch.object(util.platform, 'system', return_value='Windows'), \
