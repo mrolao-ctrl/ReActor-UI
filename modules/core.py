@@ -197,8 +197,7 @@ def report_content_rejection(media_type: str) -> None:
     )
     update_status(message, 'REACTOR.SAFETY')
     if not modules.globals.headless and ui.ROOT is not None:
-        from tkinter import messagebox
-        messagebox.showwarning('ReActor - processing stopped', message, parent=ui.ROOT)
+        ui.show_warning('ReActor - processing stopped', message)
 
 
 def start() -> None:
