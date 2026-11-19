@@ -48,7 +48,7 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     return ROOT
 
 
-def _section(parent: ctk.CTkBaseClass, title: str, hint: str = '') -> ctk.CTkFrame:
+def _section(parent, title: str, hint: str = '') -> ctk.CTkFrame:
     """Consistent resizable card for the main application settings."""
     card = ctk.CTkFrame(
         parent, fg_color=('#FFFFFF', '#1F2937'),
@@ -125,7 +125,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         'Choose a target image, video, or existing PNG sequence.'
     )
     media.grid(row=0, column=0, padx=8, pady=(0, 12), sticky='ew')
-    media.grid_columnconfigure((0, 1), weight=1)
+    media.grid_columnconfigure(0, weight=1)
+    media.grid_columnconfigure(1, weight=1)
 
     source_card = ctk.CTkFrame(
         media, fg_color=('#F4F8F6', '#25342F'), corner_radius=12
@@ -174,7 +175,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         'Choose a person in the target frame and associate a source photograph. Repeat for multiple people.'
     )
     people.grid(row=1, column=0, padx=8, pady=(0, 12), sticky='ew')
-    people.grid_columnconfigure((0, 1), weight=1)
+    people.grid_columnconfigure(0, weight=1)
+    people.grid_columnconfigure(1, weight=1)
     ctk.CTkButton(
         people, text='+  Add person + source photo', height=44,
         command=lambda: open_face_picker(multiple=True)
@@ -197,7 +199,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
 
     processing = _section(content, '03  Processing', 'Playback and output options.')
     processing.grid(row=2, column=0, padx=8, pady=(0, 12), sticky='ew')
-    processing.grid_columnconfigure((0, 1), weight=1)
+    processing.grid_columnconfigure(0, weight=1)
+    processing.grid_columnconfigure(1, weight=1)
 
     keep_fps_value = ctk.BooleanVar(value=bool(modules.globals.keep_fps))
     ctk.CTkSwitch(
@@ -239,7 +242,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         'Keep foreground objects, such as microphones and hands, in front of swapped faces.'
     )
     occlusion.grid(row=3, column=0, padx=8, pady=(0, 12), sticky='ew')
-    occlusion.grid_columnconfigure((0, 1), weight=1)
+    occlusion.grid_columnconfigure(0, weight=1)
+    occlusion.grid_columnconfigure(1, weight=1)
 
     protection_value = ctk.BooleanVar(value=bool(modules.globals.occlusion_protection))
     ctk.CTkSwitch(
@@ -271,7 +275,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         'Optional detail restoration. Compare three strengths before rendering your video.'
     )
     enhancer.grid(row=4, column=0, padx=8, pady=(0, 14), sticky='ew')
-    enhancer.grid_columnconfigure((0, 1), weight=1)
+    enhancer.grid_columnconfigure(0, weight=1)
+    enhancer.grid_columnconfigure(1, weight=1)
 
     enhancer_value = ctk.BooleanVar(
         value=bool(modules.globals.fp_ui.get('face_enhancer', False))
@@ -318,7 +323,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         root, fg_color=('#FFFFFF', '#1F2937'), corner_radius=0
     )
     footer.grid(row=2, column=0, sticky='ew')
-    footer.grid_columnconfigure((0, 1, 2), weight=1)
+    for column in range(3):
+        footer.grid_columnconfigure(column, weight=1)
     ctk.CTkButton(
         footer, text='Start processing', height=42,
         command=lambda: select_output_path(start)
@@ -387,9 +393,13 @@ def set_enhancer_strength(value: float, label: ctk.CTkLabel) -> None:
 
 
 def compare_enhancer() -> None:
-    """Render the face swap and GFPGAN once, then compare blend levels locally."""
+    """Compare three complete, unscaled frames in a vertically scrollable window.
+
+    The native frame resolution is preserved. Large frames can be inspected
+    using both horizontal and vertical scrollbars; original media is unchanged.
+    """
     if (not modules.globals.source_path and not modules.globals.face_assignments) or preview_target_count() == 0:
-        update_status('Select a source face/mapping and a video or frames first.')
+        update_status('Select a person/source mapping and a video or frames first.')
         return
 
     from modules.processors.frame import face_swapper, face_enhancer
@@ -405,14 +415,56 @@ def compare_enhancer() -> None:
         return
 
     comparison = ctk.CTkToplevel(ROOT)
-    comparison.title(f'Enhancer comparison - frame {frame_number}')
-    comparison.geometry('1030x650')
+    comparison.title(f'Full-resolution enhancer comparison · frame {frame_number}')
+    window_width = max(640, min(1300, ROOT.winfo_screenwidth() - 100))
+    window_height = max(450, min(850, ROOT.winfo_screenheight() - 100))
+    comparison.geometry(f'{window_width}x{window_height}')
+    comparison.minsize(620, 420)
+    _bring_dialog_to_front(comparison)
+
+    header = ctk.CTkFrame(comparison, fg_color='transparent')
+    header.pack(fill='x', padx=20, pady=(14, 8))
+    ctk.CTkLabel(
+        header, text=f'Enhancer comparison · Frame {frame_number}',
+        font=ctk.CTkFont(size=20, weight='bold'), anchor='w'
+    ).pack(fill='x')
+    instruction = ctk.CTkLabel(
+        header, text='Processing one frame locally. This may take time on CPU.',
+        text_color=('gray40', 'gray72'), anchor='w'
+    )
+    instruction.pack(fill='x')
+
+    viewport = ctk.CTkFrame(comparison, fg_color='transparent')
+    viewport.pack(fill='both', expand=True, padx=16, pady=6)
+    viewport.grid_columnconfigure(0, weight=1)
+    viewport.grid_rowconfigure(0, weight=1)
+
+    # CTkScrollableFrame offers one scroll direction; a Canvas allows both
+    # directions without shrinking or cropping the source-resolution images.
+    canvas = tk.Canvas(
+        viewport, bg='#F2F5F3' if ctk.get_appearance_mode() == 'Light' else '#1E2824',
+        highlightthickness=0, bd=0
+    )
+    canvas.grid(row=0, column=0, sticky='nsew')
+    vertical = ctk.CTkScrollbar(viewport, orientation='vertical', command=canvas.yview)
+    vertical.grid(row=0, column=1, sticky='ns')
+    horizontal = ctk.CTkScrollbar(viewport, orientation='horizontal', command=canvas.xview)
+    horizontal.grid(row=1, column=0, sticky='ew')
+    canvas.configure(xscrollcommand=horizontal.set, yscrollcommand=vertical.set)
+    contents = ctk.CTkFrame(canvas, fg_color='transparent')
+    canvas.create_window((0, 0), window=contents, anchor='nw')
+    contents.bind(
+        '<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all'))
+    )
+
     ctk.CTkLabel(
         comparison,
-        text='Processing one frame locally. GFPGAN can take a while on CPU.'
-    ).pack(pady=6)
-    comparison.update_idletasks()
+        text='Actual frame resolution · Scroll to inspect details · Preview only; no video files changed.',
+        text_color=('gray40', 'gray72')
+    ).pack(fill='x', padx=20, pady=(0, 12))
 
+    # Give Windows an opportunity to display this long-running operation's UI.
+    comparison.update()
     try:
         face_swapper_source = (
             face_swapper.prepare_multi_assignments()
@@ -422,27 +474,34 @@ def compare_enhancer() -> None:
         swapped = face_swapper.process_frame(face_swapper_source, frame)
         boxes = list(modules.globals.preview_face_boxes)
         if not boxes:
-            ctk.CTkLabel(comparison, text='No selected face in this frame. Try another one.').pack()
+            instruction.configure(text='No selected face in this frame. Try another one.')
             return
         candidate = face_enhancer.enhanced_candidate(swapped)
-        grid = ctk.CTkFrame(comparison)
-        grid.pack(fill='both', expand=True, padx=12, pady=12)
-        for column, amount in enumerate((0, 40, 70)):
+        for amount in (0, 40, 70):
             sample = blend_selected_faces(swapped, candidate, boxes, amount)
             image = Image.fromarray(cv2.cvtColor(sample, cv2.COLOR_BGR2RGB))
-            image = ImageOps.contain(image, (315, 525), Image.LANCZOS)
-            shown = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
-            cell = ctk.CTkFrame(grid)
-            cell.grid(row=0, column=column, padx=7, sticky='n')
-            ctk.CTkLabel(cell, text=f'{amount}% enhancement').pack(pady=4)
-            preview = ctk.CTkLabel(cell, image=shown, text='')
-            preview.image = shown
-            preview.pack(pady=4)
-        ctk.CTkLabel(
-            comparison, text='Preview only. The video has not been modified.'
-        ).pack(pady=5)
+            # IMPORTANT: no ImageOps.contain / resize here. One sample per row,
+            # and the CTkImage retains the source frame's original dimensions.
+            shown = ctk.CTkImage(
+                light_image=image, dark_image=image, size=image.size
+            )
+            card = ctk.CTkFrame(
+                contents, fg_color=('#FFFFFF', '#25372E'), corner_radius=12
+            )
+            card.pack(anchor='nw', padx=12, pady=(10, 4))
+            ctk.CTkLabel(
+                card, text=f'{amount}% enhancement  ·  {image.width} × {image.height}',
+                font=ctk.CTkFont(size=15, weight='bold'), anchor='w'
+            ).pack(fill='x', padx=14, pady=(12, 6))
+            preview = ctk.CTkLabel(card, image=shown, text='')
+            preview.image = shown  # Preserve the complete image object in memory.
+            preview.pack(padx=14, pady=(0, 14))
+        contents.update_idletasks()
+        canvas.configure(scrollregion=canvas.bbox('all'))
+        instruction.configure(text='Ready. Compare the full-size results by scrolling down.')
     except Exception as error:
-        ctk.CTkLabel(comparison, text=f'Comparison failed: {error}', wraplength=850).pack(pady=20)
+        instruction.configure(text=f'Comparison failed: {error}')
+
 
 
 def update_assignments_label() -> None:
