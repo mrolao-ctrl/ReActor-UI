@@ -1,10 +1,10 @@
 import sys
 import importlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from types import ModuleType
 from typing import Any, List, Callable
 from tqdm import tqdm
-from modules import progress_events
+from modules import progress_events, job_control
 
 import modules
 import modules.globals                   
@@ -56,13 +56,28 @@ def set_frame_processors_modules_from_ui(frame_processors: List[str]) -> None:
                 pass
 
 def multi_process_frame(source_path: str, temp_frame_paths: List[str], process_frames: Callable[[str, List[str], Any], None], progress: Any = None) -> None:
-    with ThreadPoolExecutor(max_workers=modules.globals.execution_threads) as executor:
-        futures = []
+    """Stop scheduling frames on Abort; join all in-flight native calls first."""
+    job_control.check_cancelled()
+    executor = ThreadPoolExecutor(max_workers=modules.globals.execution_threads)
+    futures = []
+    try:
         for path in temp_frame_paths:
-            future = executor.submit(process_frames, source_path, [path], progress)
-            futures.append(future)
-        for future in futures:
-            future.result()
+            job_control.check_cancelled()
+            futures.append(executor.submit(process_frames, source_path, [path], progress))
+        pending = set(futures)
+        while pending:
+            job_control.check_cancelled()
+            done, pending = wait(pending, timeout=0.2, return_when=FIRST_COMPLETED)
+            for future in done:
+                future.result()
+        job_control.check_cancelled()
+    finally:
+        if job_control.requested():
+            for future in futures:
+                future.cancel()
+        # Wait for already-running model inference to finish. The UI must not
+        # unlock a new job until those threads really have stopped.
+        executor.shutdown(wait=True, cancel_futures=job_control.requested())
 
 
 class FrameProgress(tqdm):
@@ -80,6 +95,7 @@ def process_video(source_path: str, frame_paths: list[str],
                   stage: str = 'Processing frames') -> None:
     progress_bar_format = '{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]'
     total = len(frame_paths)
+    job_control.check_cancelled()
     progress_events.report(stage, 0, total)
     with FrameProgress(total=total, desc='Processing', unit='frame', dynamic_ncols=True, bar_format=progress_bar_format) as progress:
         progress.stage = stage
