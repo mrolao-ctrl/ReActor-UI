@@ -34,6 +34,7 @@ RECENT_DIRECTORY_TARGET = None
 RECENT_DIRECTORY_OUTPUT = None
 FRAMES_PREVIEW_PATHS = []
 assignments_label = None
+assignments_list = None
 frames_fps_entry = None
 
 preview_label = None
@@ -204,7 +205,7 @@ def _bring_dialog_to_front(dialog: ctk.CTkToplevel) -> None:
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label
-    global assignments_label, frames_fps_entry, start_button, settings_button
+    global assignments_label, assignments_list, frames_fps_entry, start_button, settings_button
     global progress_bar, progress_label, preview_button
 
     ctk.deactivate_automatic_dpi_awareness()
@@ -364,15 +365,19 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
                      padx=20, pady=(0, 18), sticky='ew')
     source_card.grid_columnconfigure(0, weight=1)
     ctk.CTkLabel(
-        source_card, text='SOURCE PHOTO  ·  LATEST MAPPED PERSON', anchor='w',
+        source_card, text='MAPPED PEOPLE  ·  TARGET FACE → SOURCE PHOTO', anchor='w',
         font=ctk.CTkFont(size=12, weight='bold'),
         text_color=SUBTLE
-    ).grid(row=0, column=0, padx=15, pady=(12, 3), sticky='ew')
+    ).grid(row=0, column=0, padx=15, pady=(12, 7), sticky='ew')
+    assignments_list = ctk.CTkFrame(source_card, fg_color='transparent')
+    assignments_list.grid(row=1, column=0, padx=12, pady=(0, 10), sticky='ew')
+    assignments_list.grid_columnconfigure(0, weight=1)
     source_label = ctk.CTkLabel(
-        source_card, text='Add a person to select a source photo',
-        height=150, wraplength=700
+        source_card,
+        text='No people mapped yet. Use “Add person + source photo” above.',
+        height=90, wraplength=700, text_color=MUTED
     )
-    source_label.grid(row=1, column=0, padx=15, pady=(0, 12), sticky='ew')
+    source_label.grid(row=2, column=0, padx=15, pady=(0, 12), sticky='ew')
     update_assignments_label()
 
     processing = _section(content, '03   OUTPUT & PROCESSING', 'Playback and output options.')
@@ -1033,30 +1038,149 @@ def compare_enhancer() -> None:
 
 
 
+def _crop_selected_target_face(frame, bbox):
+    """Keep a small copy of the *original* selected face, not a swapped frame.
+
+    The crop is held in RAM alongside the identity embedding, never written
+    to disk. Slight padding shows useful context around the chosen face.
+    """
+    if frame is None or bbox is None or len(frame.shape) < 2:
+        return None
+    height, width = frame.shape[:2]
+    if not height or not width:
+        return None
+    left, top, right, bottom = (float(value) for value in bbox[:4])
+    if right <= left or bottom <= top:
+        return None
+    pad_x = (right - left) * 0.12
+    pad_y = (bottom - top) * 0.12
+    x1 = max(0, min(width, int(left - pad_x)))
+    y1 = max(0, min(height, int(top - pad_y)))
+    x2 = max(0, min(width, int(right + pad_x)))
+    y2 = max(0, min(height, int(bottom + pad_y)))
+    if x1 >= x2 or y1 >= y2:
+        return None
+    # Copy the pixels now; releasing the picker must not invalidate the crop.
+    cropped = frame[y1:y2, x1:x2].copy()
+    return Image.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+
+
+def _mapping_thumbnail(image: Image.Image, bounds: Tuple[int, int]) -> ctk.CTkImage:
+    """Fit the *whole* source photograph or selected target crop in a row."""
+    reduced = ImageOps.contain(image.convert('RGB'), bounds, Image.LANCZOS)
+    return ctk.CTkImage(light_image=reduced, dark_image=reduced, size=reduced.size)
+
+
+def _remove_face_assignment(assignments: list, index: int):
+    """Remove just one mapped identity; later indices are recalculated by UI."""
+    if 0 <= index < len(assignments):
+        return assignments.pop(index)
+    return None
+
+
+def remove_assignment(index: int) -> None:
+    """Remove one person mapping, preserving all remaining identities."""
+    if _processing_active:
+        update_status('Finish processing before editing mapped people.')
+        return
+    removed = _remove_face_assignment(modules.globals.face_assignments, index)
+    if removed is None:
+        return
+    update_assignments_label()
+    update_status(
+        f'Person {index + 1} removed. '
+        f'{len(modules.globals.face_assignments)} person(s) remain mapped.'
+    )
+
+
 def update_assignments_label() -> None:
-    """Update mapped-person count and the last selected source-photo preview."""
-    count = len(modules.globals.face_assignments)
+    """Rebuild the visual mapping list without changing the face-swap data."""
+    assignments = modules.globals.face_assignments
+    count = len(assignments)
     if assignments_label is not None:
-        if count:
-            latest = modules.globals.face_assignments[-1]['source_path']
-            assignments_label.configure(
-                text=f'{count} person(s) mapped  ·  Latest source: {Path(latest).name}'
-            )
-        else:
-            assignments_label.configure(
-                text='No people mapped yet. Add a person to start.'
-            )
+        assignments_label.configure(
+            text=(f'{count} person(s) mapped. Remove a row to replace that '
+                  'person or add another person above.')
+            if count else 'No people mapped yet. Add a person to start.'
+        )
+    if assignments_list is None:
+        return
+    for child in assignments_list.winfo_children():
+        child.destroy()
     if source_label is not None:
         if count:
-            latest = modules.globals.face_assignments[-1]['source_path']
-            image = render_image_preview(latest, (190, 160))
-            source_label.configure(image=image, text='')
-            source_label.image = image
-        elif not modules.globals.source_path:
+            source_label.grid_remove()
+        else:
             source_label.configure(
-                image=None, text='Add a person to select a source photo'
+                image=None,
+                text='No people mapped yet. Use “Add person + source photo” above.'
             )
             source_label.image = None
+            source_label.grid()
+
+    for index, assignment in enumerate(assignments):
+        row = ctk.CTkFrame(
+            assignments_list, fg_color=CARD_RAISED,
+            corner_radius=12, border_width=1, border_color=BORDER
+        )
+        row.grid(row=index, column=0, pady=(0, 9), sticky='ew')
+        row.grid_columnconfigure(2, weight=1)
+
+        ctk.CTkLabel(
+            row, text='TARGET FACE', text_color=SUBTLE,
+            font=ctk.CTkFont(size=11, weight='bold')
+        ).grid(row=0, column=0, padx=(12, 5), pady=(10, 3))
+        ctk.CTkLabel(
+            row, text='SOURCE PHOTO', text_color=SUBTLE,
+            font=ctk.CTkFont(size=11, weight='bold')
+        ).grid(row=0, column=1, padx=5, pady=(10, 3))
+
+        crop = assignment.get('target_crop')
+        if isinstance(crop, Image.Image):
+            crop_image = _mapping_thumbnail(crop, (112, 112))
+            crop_label = ctk.CTkLabel(
+                row, image=crop_image, text='', width=120, height=118
+            )
+            crop_label.image = crop_image
+        else:
+            crop_label = ctk.CTkLabel(
+                row, text='Preview\nunavailable', text_color=MUTED,
+                width=120, height=118
+            )
+        crop_label.grid(row=1, column=0, padx=(12, 5), pady=(0, 12))
+
+        source_path = assignment['source_path']
+        try:
+            with Image.open(source_path) as opened:
+                original = ImageOps.exif_transpose(opened).convert('RGB')
+            source_image = _mapping_thumbnail(original, (112, 112))
+            photo_label = ctk.CTkLabel(
+                row, image=source_image, text='', width=120, height=118
+            )
+            photo_label.image = source_image
+        except (OSError, ValueError):
+            photo_label = ctk.CTkLabel(
+                row, text='Photo\nunavailable', text_color=MUTED,
+                width=120, height=118
+            )
+        photo_label.grid(row=1, column=1, padx=5, pady=(0, 12))
+
+        frame_number = assignment.get('target_frame')
+        details = (
+            f'Person {index + 1:02d}\n'
+            + (f'Frame {frame_number}\n' if frame_number is not None else '')
+            + Path(source_path).name
+        )
+        ctk.CTkLabel(
+            row, text=details, anchor='w', justify='left',
+            text_color=TEXT, wraplength=225
+        ).grid(row=1, column=2, padx=(12, 7), pady=(0, 12), sticky='w')
+        ctk.CTkButton(
+            row, text='Remove', width=90, height=34,
+            fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+            text_color=TEXT, border_width=1, border_color=BORDER,
+            command=lambda position=index: remove_assignment(position)
+        ).grid(row=1, column=3, padx=(7, 13), pady=(0, 12), sticky='e')
 
 
 def clear_assignments() -> None:
@@ -1235,7 +1359,10 @@ def open_face_picker(multiple: bool = False) -> None:
     )
     feedback.pack(padx=12, pady=5)
 
-    state = {'faces': [], 'boxes': [], 'display_size': (0, 0)}
+    state = {
+        'faces': [], 'boxes': [], 'display_size': (0, 0),
+        'frame': None, 'frame_number': None
+    }
     total_frames = preview_target_count()
     max_frame_index = max(0, total_frames - 1)
     frame_slider = ctk.CTkSlider(
@@ -1252,6 +1379,7 @@ def open_face_picker(multiple: bool = False) -> None:
         picker.update_idletasks()
         frame = preview_target_frame(frame_index)
         if frame is None:
+            state.update(faces=[], boxes=[], frame=None, frame_number=None)
             feedback.configure(text='Could not read this frame. Try another one.')
             return
 
@@ -1276,12 +1404,15 @@ def open_face_picker(multiple: bool = False) -> None:
         state['faces'] = faces
         state['boxes'] = boxes
         state['display_size'] = image.size
+        state['frame'] = frame
+        state['frame_number'] = frame_index + 1
         feedback.configure(
             text=f'Frame {frame_index + 1}: {len(faces)} face(s) found. Click the face to replace.'
             if faces else f'Frame {frame_index + 1}: no faces found. Choose a different frame.'
         )
 
     def choose_face(event) -> None:
+        global RECENT_DIRECTORY_SOURCE
         # CTkLabel centres the image if its widget is larger than the bitmap.
         width, height = state['display_size']
         offset_x = max(0, (preview.winfo_width() - width) / 2)
@@ -1295,6 +1426,12 @@ def open_face_picker(multiple: bool = False) -> None:
                     feedback.configure(text='No identity embedding found. Choose another frame.')
                     return
                 if multiple:
+                    crop = _crop_selected_target_face(state['frame'], face.bbox)
+                    if crop is None:
+                        feedback.configure(
+                            text='Unable to crop the selected face. Load another frame.'
+                        )
+                        return
                     photo = ctk.filedialog.askopenfilename(
                         title='Select the source photo for this person',
                         initialdir=RECENT_DIRECTORY_SOURCE,
@@ -1308,12 +1445,15 @@ def open_face_picker(multiple: bool = False) -> None:
                         if score > 0.92:
                             feedback.configure(
                                 text='This person is already mapped. Choose another person '
-                                     'or clear existing assignments.'
+                                     'or remove that person’s row to replace their photo.'
                             )
                             return
+                    RECENT_DIRECTORY_SOURCE = os.path.dirname(photo)
                     modules.globals.face_assignments.append({
                         'embedding': embedding.copy(),
-                        'source_path': photo
+                        'source_path': photo,
+                        'target_crop': crop,
+                        'target_frame': state['frame_number'],
                     })
                     modules.globals.target_face_embedding = None
                     modules.globals.many_faces = False
