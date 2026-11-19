@@ -18,6 +18,7 @@ import tensorflow
 
 import modules.globals
 import modules.metadata
+from modules import job_control
 from modules.app_settings import load_settings, recommended_models_directory
 import modules.ui as ui
 from modules.processors.frame.core import get_frame_processors_modules
@@ -201,6 +202,7 @@ def report_content_rejection(media_type: str) -> None:
 
 
 def start() -> None:
+    job_control.check_cancelled()
     # Direct PNG mode never extracts frames or reads an original video.
     if modules.globals.frames_directory:
         modules.globals.frame_target_boxes.clear()
@@ -210,8 +212,10 @@ def start() -> None:
             raise RuntimeError('Select an output MP4 file for existing frames mode')
         from modules.processors.frame import face_swapper
         from modules.frames_workflow import run_existing_frames
+        job_control.check_cancelled()
         if not face_swapper.pre_start():
             return
+        job_control.check_cancelled()
         run_existing_frames(
             modules.globals.frames_directory, modules.globals.output_path,
             float(modules.globals.frames_fps),
@@ -224,6 +228,7 @@ def start() -> None:
     modules.globals.preview_face_boxes = []
     modules.globals.frame_recovery_log.clear()
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+        job_control.check_cancelled()
         if not frame_processor.pre_start():
             return
     # process image to image
@@ -236,6 +241,7 @@ def start() -> None:
                 return
         shutil.copy2(modules.globals.target_path, modules.globals.output_path)
         for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+            job_control.check_cancelled()
             update_status('Progressing...', frame_processor.NAME)
             frame_processor.process_image(modules.globals.source_path, modules.globals.output_path, modules.globals.output_path)
             release_resources()
@@ -251,18 +257,23 @@ def start() -> None:
         if predict_video(modules.globals.target_path):
             report_content_rejection('video')
             return
+    job_control.check_cancelled()
     update_status('Creating temp resources...')
     create_temp(modules.globals.target_path)
+    job_control.check_cancelled()
     update_status('Extracting frames...')
     extract_frames(modules.globals.target_path)
     temp_dir = get_temp_directory_path(modules.globals.target_path)
     temp_frame_paths = expected_frame_paths(temp_dir, get_video_frame_total(modules.globals.target_path))
     repair_frames(temp_frame_paths, 'extraction')
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
+        job_control.check_cancelled()
         update_status('Progressing...', frame_processor.NAME)
         frame_processor.process_video(modules.globals.source_path, temp_frame_paths)
+        job_control.check_cancelled()
         repair_frames(temp_frame_paths, frame_processor.NAME)
         release_resources()
+    job_control.check_cancelled()
     # handles fps
     if modules.globals.keep_fps:
         update_status('Detecting fps...')
@@ -272,6 +283,7 @@ def start() -> None:
     else:
         update_status('Creating video with 30.0 fps...')
         create_video(modules.globals.target_path)
+    job_control.check_cancelled()
     # handle audio
     if modules.globals.keep_audio:
         if modules.globals.keep_fps:
@@ -281,6 +293,7 @@ def start() -> None:
         restore_audio(modules.globals.target_path, modules.globals.output_path)
     else:
         move_temp(modules.globals.target_path, modules.globals.output_path)
+    job_control.check_cancelled()
     # Validate the actual output before removing any temporary frames.
     if not is_video(modules.globals.output_path) or os.path.getsize(modules.globals.output_path) == 0:
         raise RuntimeError(
@@ -304,6 +317,7 @@ def start() -> None:
             f'Video exported with {len(modules.globals.frame_recovery_log)} '
             f'frame repair(s). Inspect {report_path}'
         )
+    job_control.check_cancelled()
     clean_temp(modules.globals.target_path)
     update_status('Processing to video succeed!')
 
@@ -317,9 +331,12 @@ def destroy() -> None:
 def prepare_models() -> bool:
     """Download/check models when actually processing, not before Settings opens."""
     try:
+        job_control.check_cancelled()
         for processor in get_frame_processors_modules(modules.globals.frame_processors):
+            job_control.check_cancelled()
             if not processor.pre_check():
                 return False
+        job_control.check_cancelled()
         return True
     except (OSError, RuntimeError, ValueError) as error:
         update_status(f'Model preparation failed: {error}')
