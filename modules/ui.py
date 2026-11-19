@@ -9,7 +9,7 @@ from pathlib import Path
 import customtkinter as ctk
 from typing import Callable, Tuple
 import cv2
-from PIL import Image, ImageOps, ImageDraw
+from PIL import Image, ImageOps, ImageDraw, ImageTk
 
 import modules.globals
 import modules.metadata
@@ -23,7 +23,7 @@ from modules.utilities import is_image, is_video, resolve_relative_path
 
 ROOT = None
 ROOT_HEIGHT = 820
-ROOT_WIDTH = 980
+ROOT_WIDTH = 1040
 
 PREVIEW = None
 PREVIEW_MAX_HEIGHT = 700
@@ -49,6 +49,22 @@ preview_button = None
 _UI_EVENTS = queue.Queue()
 _processing_active = False
 
+# GuideMe design tokens, based on the current Android/web dark theme.
+# Keep these independent of processing, identity detection, and model settings.
+BG = '#050816'
+SURFACE = '#0E162D'
+CARD = '#131D38'
+CARD_RAISED = '#1A2544'
+BORDER = '#29375B'
+PURPLE = '#6D5CFF'
+PURPLE_HOVER = '#8577FF'
+BLUE = '#4F8CFF'
+TEXT = '#F5F7FF'
+MUTED = '#AAB3C5'
+SUBTLE = '#7786AB'
+SECONDARY_BG = '#222E4F'
+SECONDARY_HOVER = '#2E3D62'
+
 img_ft, vid_ft = modules.globals.file_types
 
 
@@ -63,12 +79,27 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     return ROOT
 
 
+def _set_app_icon(window) -> None:
+    """Use one branded icon for the main window, previews and tool dialogs."""
+    icon_file = Path(__file__).resolve().parents[1] / 'assets' / 'reactor-studio.png'
+    if not icon_file.is_file():
+        return
+    try:
+        with Image.open(icon_file) as opened:
+            picture = opened.convert('RGBA')
+        image = ImageTk.PhotoImage(picture, master=window)
+        window.iconphoto(True, image)
+        window._reactor_icon_ref = image
+    except (OSError, RuntimeError, tk.TclError) as error:
+        print(f'[REACTOR.UI] Could not load optional application icon: {error}')
+
+
 def _section(parent, title: str, hint: str = '') -> ctk.CTkFrame:
     """Consistent resizable card for the main application settings."""
     card = ctk.CTkFrame(
-        parent, fg_color=('#FFFFFF', '#1F2937'),
-        corner_radius=15, border_width=1,
-        border_color=('#DFE8E5', '#33443F')
+        parent, fg_color=SURFACE,
+        corner_radius=20, border_width=1,
+        border_color=BORDER
     )
     card.grid_columnconfigure(0, weight=1)
     card.grid_columnconfigure(1, weight=1)
@@ -79,7 +110,7 @@ def _section(parent, title: str, hint: str = '') -> ctk.CTkFrame:
     if hint:
         ctk.CTkLabel(
             card, text=hint, anchor='w',
-            text_color=('gray42', 'gray68'), wraplength=780
+            text_color=MUTED, wraplength=820
         ).grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 12), sticky='ew')
     return card
 
@@ -105,42 +136,96 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     global progress_bar, progress_label, preview_button
 
     ctk.deactivate_automatic_dpi_awareness()
-    ctk.set_appearance_mode('system')
+    ctk.set_appearance_mode('dark')
     ctk.set_default_color_theme(resolve_relative_path('ui.json'))
 
-    root = ctk.CTk(fg_color=('#F1F5F4', '#101A18'))
+    root = ctk.CTk(fg_color=BG)
+    _set_app_icon(root)
     root.geometry(f'{ROOT_WIDTH}x{ROOT_HEIGHT}')
-    root.minsize(760, 620)
+    root.minsize(800, 640)
     root.title(f'{modules.metadata.name} {modules.metadata.version} {modules.metadata.edition}')
     root.protocol('WM_DELETE_WINDOW', lambda: request_close(destroy))
     root.grid_columnconfigure(0, weight=1)
     root.grid_rowconfigure(1, weight=1)
 
     header = ctk.CTkFrame(
-        root, fg_color=('#E4F5EC', '#19362A'), corner_radius=0
+        root, fg_color='#0B1430', corner_radius=0, border_width=0
     )
     header.grid(row=0, column=0, sticky='ew')
-    header.grid_columnconfigure(0, weight=1)
-    settings_button = ctk.CTkButton(header, text='Settings', width=132, height=36, command=open_settings)
-    settings_button.grid(row=0, column=1, rowspan=2, padx=(6, 24), pady=18, sticky='e')
+    header.grid_columnconfigure(1, weight=1)
+
+    logo_path = Path(__file__).resolve().parents[1] / 'assets' / 'reactor-studio.png'
+    if logo_path.is_file():
+        try:
+            with Image.open(logo_path) as opened:
+                logo_pil = opened.convert('RGB')
+            logo = ctk.CTkImage(light_image=logo_pil, dark_image=logo_pil,
+                                size=(56, 56))
+            logo_label = ctk.CTkLabel(header, image=logo, text='', width=60)
+            logo_label.image = logo
+        except OSError:
+            logo_label = ctk.CTkLabel(
+                header, text='R', width=60,
+                font=ctk.CTkFont(size=30, weight='bold'),
+                text_color=BLUE
+            )
+    else:
+        logo_label = ctk.CTkLabel(
+            header, text='R', width=60,
+            font=ctk.CTkFont(size=30, weight='bold'), text_color=BLUE
+        )
+    logo_label.grid(row=0, column=0, rowspan=3, padx=(26, 16), pady=18)
+
     ctk.CTkLabel(
-        header, text='ReActor  /  Studio', anchor='w',
-        font=ctk.CTkFont(size=26, weight='bold')
-    ).grid(row=0, column=0, padx=26, pady=(16, 0), sticky='ew')
+        header, text='REACTOR', anchor='w', text_color=TEXT,
+        font=ctk.CTkFont(size=25, weight='bold')
+    ).grid(row=0, column=1, padx=0, pady=(14, 0), sticky='ew')
     ctk.CTkLabel(
-        header,
-        text='Local face replacement  •  Map people, choose your input and refine the output',
-        anchor='w', text_color=('gray38', 'gray70')
-    ).grid(row=1, column=0, padx=26, pady=(0, 15), sticky='ew')
+        header, text='FACE STUDIO   /   LOCAL WORKSPACE', anchor='w',
+        text_color=BLUE, font=ctk.CTkFont(size=12, weight='bold')
+    ).grid(row=1, column=1, padx=0, pady=(0, 3), sticky='ew')
+    ctk.CTkLabel(
+        header, text='Map identities  ·  Refine details  ·  Export locally',
+        anchor='w', text_color=MUTED, font=ctk.CTkFont(size=12)
+    ).grid(row=2, column=1, padx=0, pady=(0, 12), sticky='ew')
+    settings_button = ctk.CTkButton(
+        header, text='⚙  Settings', width=146, height=40,
+        fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+        text_color=TEXT, border_width=1, border_color=BORDER,
+        command=open_settings
+    )
+    settings_button.grid(row=0, column=2, rowspan=3,
+                         padx=(12, 24), pady=18, sticky='e')
+
+
+    # Compact GuideMe-style workflow strip; informational, not clickable.
+    steps = ctk.CTkFrame(header, fg_color='transparent', corner_radius=0)
+    steps.grid(row=3, column=0, columnspan=3, sticky='ew',
+               padx=24, pady=(0, 14))
+    for column, step in enumerate(
+        ('01   SELECT MEDIA', '02   MAP FACES', '03   ENHANCE', '04   EXPORT')
+    ):
+        steps.grid_columnconfigure(column, weight=1)
+        chip = ctk.CTkFrame(
+            steps, fg_color=('#1C2750' if column == 0 else '#121B36'),
+            corner_radius=11, border_width=1,
+            border_color=('#6152D5' if column == 0 else BORDER)
+        )
+        chip.grid(row=0, column=column,
+                  padx=(0, 7) if column < 3 else 0, sticky='ew')
+        ctk.CTkLabel(
+            chip, text=step, text_color=('#E9E5FF' if column == 0 else MUTED),
+            font=ctk.CTkFont(size=11, weight='bold')
+        ).pack(padx=7, pady=9)
 
     content = ctk.CTkScrollableFrame(
         root, fg_color='transparent', corner_radius=0
     )
-    content.grid(row=1, column=0, padx=14, pady=(12, 6), sticky='nsew')
+    content.grid(row=1, column=0, padx=18, pady=(16, 8), sticky='nsew')
     content.grid_columnconfigure(0, weight=1)
 
     media = _section(
-        content, '01  Media',
+        content, '01   MEDIA LIBRARY',
         'Choose a target image, video, or existing PNG sequence.'
     )
     media.grid(row=0, column=0, padx=8, pady=(0, 12), sticky='ew')
@@ -148,14 +233,15 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     media.grid_columnconfigure(1, weight=1)
 
     source_card = ctk.CTkFrame(
-        media, fg_color=('#F4F8F6', '#25342F'), corner_radius=12
+        media, fg_color=CARD, corner_radius=16,
+        border_width=1, border_color=BORDER
     )
     source_card.grid(row=2, column=0, padx=(18, 8), pady=(0, 18), sticky='nsew')
     source_card.grid_columnconfigure(0, weight=1)
     ctk.CTkLabel(
         source_card, text='SOURCE PHOTO', anchor='w',
         font=ctk.CTkFont(size=12, weight='bold'),
-        text_color=('gray40', 'gray69')
+        text_color=SUBTLE
     ).grid(row=0, column=0, padx=15, pady=(12, 3), sticky='ew')
     source_label = ctk.CTkLabel(
         source_card, text='Add a person below to select a source photo',
@@ -164,14 +250,14 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     source_label.grid(row=1, column=0, padx=15, pady=(0, 12), sticky='nsew')
 
     target_card = ctk.CTkFrame(
-        media, fg_color=('#F4F8F6', '#25342F'), corner_radius=12
+        media, fg_color=CARD, corner_radius=12
     )
     target_card.grid(row=2, column=1, padx=(8, 18), pady=(0, 18), sticky='nsew')
     target_card.grid_columnconfigure(0, weight=1)
     ctk.CTkLabel(
         target_card, text='TARGET MEDIA', anchor='w',
         font=ctk.CTkFont(size=12, weight='bold'),
-        text_color=('gray40', 'gray69')
+        text_color=SUBTLE
     ).grid(row=0, column=0, padx=15, pady=(12, 3), sticky='ew')
     target_label = ctk.CTkLabel(
         target_card, text='No target selected', height=160, wraplength=280
@@ -184,13 +270,13 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     ctk.CTkButton(
         target_card, text='Use existing PNG frames',
         command=select_frames_directory, height=36,
-        fg_color=('#D8EDE2', '#365044'),
-        text_color=('#174D32', '#F3FFF8'),
-        hover_color=('#C8E0D1', '#446254')
+        fg_color=SECONDARY_BG,
+        text_color=TEXT,
+        hover_color=SECONDARY_HOVER
     ).grid(row=3, column=0, padx=15, pady=(0, 15), sticky='ew')
 
     people = _section(
-        content, '02  People & source photos',
+        content, '02   PEOPLE & SOURCE PHOTOS',
         'Choose a person in the target frame and associate a source photograph. Repeat for multiple people.'
     )
     people.grid(row=1, column=0, padx=8, pady=(0, 12), sticky='ew')
@@ -202,13 +288,13 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     ).grid(row=2, column=0, padx=(20, 8), pady=(0, 12), sticky='ew')
     ctk.CTkButton(
         people, text='Clear person assignments', height=44,
-        fg_color=('#E5ECE9', '#34473E'),
-        text_color=('#294E3E', '#E6F6EE'),
-        hover_color=('#D7E3DC', '#3C5748'),
+        fg_color=SECONDARY_BG,
+        text_color=TEXT,
+        hover_color=SECONDARY_HOVER,
         command=clear_assignments
     ).grid(row=2, column=1, padx=(8, 20), pady=(0, 12), sticky='ew')
     assignments_label = ctk.CTkLabel(
-        people, text='', anchor='w', text_color=('gray38', 'gray72'),
+        people, text='', anchor='w', text_color=MUTED,
         wraplength=780
     )
     assignments_label.grid(
@@ -216,7 +302,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     update_assignments_label()
 
-    processing = _section(content, '03  Processing', 'Playback and output options.')
+    processing = _section(content, '03   OUTPUT & PROCESSING', 'Playback and output options.')
     processing.grid(row=2, column=0, padx=8, pady=(0, 12), sticky='ew')
     processing.grid_columnconfigure(0, weight=1)
     processing.grid_columnconfigure(1, weight=1)
@@ -257,7 +343,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     frames_fps_entry.pack(side='left')
 
     occlusion = _section(
-        content, '04  Occlusion protection',
+        content, '04   OCCLUSION PROTECTION',
         'Keep foreground objects, such as microphones and hands, in front of swapped faces.'
     )
     occlusion.grid(row=3, column=0, padx=8, pady=(0, 12), sticky='ew')
@@ -290,7 +376,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     landmark_mode_menu.pack(side='left', fill='x', expand=True)
 
     enhancer = _section(
-        content, '05  Face Enhancer',
+        content, '05   FACE ENHANCER',
         'Optional detail restoration. Compare three strengths before rendering your video.'
     )
     enhancer.grid(row=4, column=0, padx=8, pady=(0, 14), sticky='ew')
@@ -339,46 +425,46 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     ).grid(row=4, column=0, columnspan=2, padx=22, pady=(0, 20), sticky='ew')
 
     footer = ctk.CTkFrame(
-        root, fg_color=('#FFFFFF', '#1F2937'), corner_radius=0
+        root, fg_color='#0B1430', corner_radius=0
     )
     footer.grid(row=2, column=0, sticky='ew')
     for column in range(3):
         footer.grid_columnconfigure(column, weight=1)
     start_button = ctk.CTkButton(
-        footer, text='Start processing', height=42,
+        footer, text='Start processing', height=46,
         command=lambda: select_output_path(lambda: launch_background(start))
     )
     start_button.grid(row=0, column=0, padx=(24, 7), pady=(14, 5), sticky='ew')
     preview_button = ctk.CTkButton(
-        footer, text='Preview', height=42, command=toggle_preview,
-        fg_color=('#D8EDE2', '#365044'),
-        text_color=('#174D32', '#F3FFF8'),
-        hover_color=('#C8E0D1', '#446254')
+        footer, text='Preview', height=44, command=toggle_preview,
+        fg_color=SECONDARY_BG,
+        text_color=TEXT,
+        hover_color=SECONDARY_HOVER
     )
     preview_button.grid(row=0, column=1, padx=7, pady=(14, 5), sticky='ew')
     ctk.CTkButton(
-        footer, text='Close', height=42, command=lambda: request_close(destroy),
-        fg_color=('#E8EBE9', '#34413C'),
-        text_color=('#345045', '#EBF6F0'),
-        hover_color=('#D6DFDA', '#3D5349')
+        footer, text='Close', height=44, command=lambda: request_close(destroy),
+        fg_color=SECONDARY_BG,
+        text_color=TEXT,
+        hover_color=SECONDARY_HOVER
     ).grid(row=0, column=2, padx=(7, 24), pady=(14, 5), sticky='ew')
     status_label = ctk.CTkLabel(
-        footer, text='Ready. Select a target and add a person.',
+        footer, text='●  READY  /  Select your target video and map a source face.',
         anchor='w', justify='left', wraplength=830,
-        text_color=('gray38', 'gray70')
+        text_color=MUTED
     )
     status_label.grid(
         row=1, column=0, columnspan=3, padx=24, pady=(0, 8), sticky='ew'
     )
     github = ctk.CTkLabel(
         footer, text='Gourieff GitHub  ·  Original project',
-        cursor='hand2', text_color=('#288A60', '#6ED5A0'),
+        cursor='hand2', text_color=BLUE,
         font=ctk.CTkFont(size=12)
     )
     progress_bar = ctk.CTkProgressBar(footer, mode='determinate', height=12)
     progress_bar.set(0)
     progress_bar.grid(row=2, column=0, columnspan=3, padx=24, pady=(5, 4), sticky='ew')
-    progress_label = ctk.CTkLabel(footer, text='No processing in progress', anchor='w', text_color=('gray40', 'gray70'))
+    progress_label = ctk.CTkLabel(footer, text='No processing in progress', anchor='w', text_color=MUTED)
     progress_label.grid(row=3, column=0, columnspan=3, padx=24, pady=(0, 5), sticky='ew')
     github.grid(row=4, column=0, columnspan=3, padx=24, pady=(0, 9))
     github.bind('<Button-1>', lambda event: webbrowser.open('https://github.com/Gourieff'))
@@ -391,7 +477,8 @@ def open_settings() -> None:
         update_status('Finish the current processing job before changing Settings.')
         return
 
-    dialog = ctk.CTkToplevel(ROOT)
+    dialog = ctk.CTkToplevel(ROOT, fg_color=BG)
+    _set_app_icon(dialog)
     dialog.title('ReActor Studio · Settings')
     dialog.geometry('680x700')
     dialog.minsize(580, 540)
@@ -403,7 +490,7 @@ def open_settings() -> None:
     ).pack(fill='x', padx=24, pady=(20, 2))
     ctk.CTkLabel(
         dialog, text='Saved in your Windows profile; retained after app updates.',
-        text_color=('gray42', 'gray72'), anchor='w'
+        text_color=MUTED, anchor='w'
     ).pack(fill='x', padx=24, pady=(0, 12))
 
     content = ctk.CTkScrollableFrame(dialog, fg_color='transparent')
@@ -506,12 +593,12 @@ def open_settings() -> None:
         text='Reuse models/inswapper_128.onnx and models/xseg_1.onnx from '
              'your previous installation. Other InsightFace weights remain in '
              'your user profile. Models are not included in the installer.',
-        wraplength=560, justify='left', text_color=('gray40', 'gray70')
+        wraplength=560, justify='left', text_color=MUTED
     ).grid(row=8, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
     ctk.CTkLabel(
         content, text='All current Keep FPS/Audio/Frames, XSeg and Enhancer '
                       'switches on the main screen are also saved as defaults.',
-        wraplength=560, justify='left', text_color=('gray40', 'gray70')
+        wraplength=560, justify='left', text_color=MUTED
     ).grid(row=9, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
 
     feedback = ctk.CTkLabel(dialog, text='', anchor='w', wraplength=600)
@@ -559,8 +646,8 @@ def open_settings() -> None:
                   command=save).pack(side='right')
     ctk.CTkButton(
         bar, text='Cancel', width=110, height=40,
-        fg_color=('#E8EBE9', '#34413C'),
-        text_color=('#345045', '#EBF6F0'),
+        fg_color=SECONDARY_BG,
+        text_color=TEXT,
         command=dialog.destroy
     ).pack(side='right', padx=(0, 10))
 
@@ -568,7 +655,8 @@ def open_settings() -> None:
 def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
     global preview_label, preview_slider
 
-    preview = ctk.CTkToplevel(parent)
+    preview = ctk.CTkToplevel(parent, fg_color=BG)
+    _set_app_icon(preview)
     preview.withdraw()
     preview.title('Preview')
     preview.configure()
@@ -735,7 +823,8 @@ def compare_enhancer() -> None:
         update_status('Cannot read comparison frame.')
         return
 
-    comparison = ctk.CTkToplevel(ROOT)
+    comparison = ctk.CTkToplevel(ROOT, fg_color=BG)
+    _set_app_icon(comparison)
     comparison.title(f'Full-resolution enhancer comparison · frame {frame_number}')
     window_width = max(640, min(1300, ROOT.winfo_screenwidth() - 100))
     window_height = max(450, min(850, ROOT.winfo_screenheight() - 100))
@@ -751,7 +840,7 @@ def compare_enhancer() -> None:
     ).pack(fill='x')
     instruction = ctk.CTkLabel(
         header, text='Processing one frame locally. This may take time on CPU.',
-        text_color=('gray40', 'gray72'), anchor='w'
+        text_color=MUTED, anchor='w'
     )
     instruction.pack(fill='x')
 
@@ -763,7 +852,7 @@ def compare_enhancer() -> None:
     # CTkScrollableFrame offers one scroll direction; a Canvas allows both
     # directions without shrinking or cropping the source-resolution images.
     canvas = tk.Canvas(
-        viewport, bg='#F2F5F3' if ctk.get_appearance_mode() == 'Light' else '#1E2824',
+        viewport, bg=BG,
         highlightthickness=0, bd=0
     )
     canvas.grid(row=0, column=0, sticky='nsew')
@@ -792,7 +881,7 @@ def compare_enhancer() -> None:
     ctk.CTkLabel(
         comparison,
         text='Actual frame resolution · Scroll to inspect details · Preview only; no video files changed.',
-        text_color=('gray40', 'gray72')
+        text_color=MUTED
     ).pack(fill='x', padx=20, pady=(0, 12))
 
     # Give Windows an opportunity to display this long-running operation's UI.
@@ -818,7 +907,7 @@ def compare_enhancer() -> None:
                 light_image=image, dark_image=image, size=image.size
             )
             card = ctk.CTkFrame(
-                contents, fg_color=('#FFFFFF', '#25372E'), corner_radius=12
+                contents, fg_color=CARD, corner_radius=12
             )
             card.pack(anchor='nw', padx=12, pady=(10, 4))
             ctk.CTkLabel(
@@ -1016,7 +1105,8 @@ def open_face_picker(multiple: bool = False) -> None:
         update_status('Select a target video, image, or PNG frames folder first.')
         return
 
-    picker = ctk.CTkToplevel(ROOT)
+    picker = ctk.CTkToplevel(ROOT, fg_color=BG)
+    _set_app_icon(picker)
     picker.title('Add person + reference photo' if multiple else 'Choose the person to replace')
     picker.geometry('900x720')
     picker.minsize(650, 650)
