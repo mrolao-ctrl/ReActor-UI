@@ -16,7 +16,7 @@ import subprocess
 from tqdm import tqdm
 
 import modules.globals
-from modules import progress_events
+from modules import progress_events, job_control
 from modules.frame_io import read_image, write_frame
 from modules.frame_recovery import png_is_readable
 
@@ -27,6 +27,7 @@ def input_sequence(folder: str) -> tuple:
         raise RuntimeError(f'Frames folder not found: {directory}')
     names = {}
     for path in directory.glob('*.png'):
+        job_control.check_cancelled()
         if path.stem.isdigit() and int(path.stem) >= 1:
             index = int(path.stem)
             if index in names:
@@ -41,6 +42,7 @@ def input_sequence(folder: str) -> tuple:
     dimensions = {}
     for number, path in tqdm(sorted(names.items()), desc='Checking input PNGs',
                              unit='frame'):
+        job_control.check_cancelled()
         if png_is_readable(str(path)):
             valid[number] = str(path)
             with Image.open(path) as image:
@@ -57,6 +59,7 @@ def input_sequence(folder: str) -> tuple:
     resolved = []
     repairs = []
     for number in range(1, count + 1):
+        job_control.check_cancelled()
         if number in valid:
             resolved.append(valid[number])
             continue
@@ -109,6 +112,7 @@ def job_fingerprint(folder: str, output_path: str, sources: list,
 
 
 def create_work_folder(output_path: str, fingerprint: str) -> Path:
+    job_control.check_cancelled()
     destination = Path(str(Path(output_path).resolve()) + '.frames')
     destination.mkdir(parents=True, exist_ok=True)
     manifest = destination / 'job.json'
@@ -133,6 +137,7 @@ def create_work_folder(output_path: str, fingerprint: str) -> Path:
 
 
 def assemble_frames(folder: Path, output_path: str, fps: float, count: int) -> None:
+    job_control.check_cancelled()
     destination = Path(output_path).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.stem + '.partial.mp4')
@@ -152,23 +157,30 @@ def assemble_frames(folder: Path, output_path: str, fps: float, count: int) -> N
     progress_events.report('Encoding MP4', 0, count)
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, bufsize=1) as process:
-        for line in process.stdout:
-            line = line.strip()
-            if line.startswith('frame='):
-                number = int(line.split('=', 1)[1].strip())
-                print(f'[FRAMES] Encoded {number}/{count} ({number/count*100:.1f}%)',
-                      flush=True)
-                progress_events.report('Encoding MP4', number, count)
-            elif line and not line.startswith(('fps=', 'stream_', 'bitrate=', 'total_size=',
-                                               'out_time', 'dup_frames=', 'drop_frames=',
-                                               'speed=', 'progress=', 'quality=')):
-                print('[FFmpeg]', line, flush=True)
-        exit_code = process.wait()
+        job_control.register_process(process)
+        try:
+            for line in process.stdout:
+                job_control.check_cancelled()
+                line = line.strip()
+                if line.startswith('frame='):
+                    number = int(line.split('=', 1)[1].strip())
+                    print(f'[FRAMES] Encoded {number}/{count} ({number/count*100:.1f}%)',
+                          flush=True)
+                    progress_events.report('Encoding MP4', number, count)
+                elif line and not line.startswith(('fps=', 'stream_', 'bitrate=', 'total_size=',
+                                                   'out_time', 'dup_frames=', 'drop_frames=',
+                                                   'speed=', 'progress=', 'quality=')):
+                    print('[FFmpeg]', line, flush=True)
+            exit_code = process.wait()
+            job_control.check_cancelled()
+        finally:
+            job_control.unregister_process(process)
     if exit_code != 0 or not partial.is_file() or partial.stat().st_size == 0:
         raise RuntimeError(
             f'FFmpeg export failed (code {exit_code}). Completed PNGs are preserved '
             f'in {folder} for resume.'
         )
+    job_control.check_cancelled()
     probe = subprocess.run([
         'ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0',
         '-show_entries', 'stream=nb_read_frames',
@@ -178,8 +190,10 @@ def assemble_frames(folder: Path, output_path: str, fps: float, count: int) -> N
         actual = int(probe.stdout.strip())
     except ValueError as error:
         raise RuntimeError(f'Could not verify video frame count: {probe.stdout}') from error
+    job_control.check_cancelled()
     if actual != count:
         raise RuntimeError(f'Export has {actual} frames; expected {count}. Keeping PNGs.')
+    job_control.check_cancelled()
     os.replace(str(partial), str(destination))
 
 
@@ -190,6 +204,7 @@ def run_existing_frames(
     enhancer_enabled: bool = False
 ) -> None:
     """Create a silent MP4 from PNGs; resume completed output frames on retry."""
+    job_control.check_cancelled()
     if not output_path.lower().endswith('.mp4'):
         raise ValueError('Existing frames mode requires a .mp4 output path')
     if not 1 <= fps <= 120:
@@ -198,6 +213,7 @@ def run_existing_frames(
     from modules.processors.frame import face_enhancer, face_swapper
 
     input_paths, repairs = input_sequence(frames_folder)
+    job_control.check_cancelled()
     if not modules.globals.face_assignments and not modules.globals.source_path:
         raise RuntimeError('Choose a source face or add one or more person assignments')
 
@@ -231,6 +247,7 @@ def run_existing_frames(
     with tqdm(total=len(input_paths), desc='Swap existing frames',
               unit='frame', dynamic_ncols=True) as bar:
         for index, original in enumerate(input_paths, 1):
+            job_control.check_cancelled()
             output_frame = work / f'{index:04d}.png'
             if png_is_readable(str(output_frame)):
                 skipped += 1
@@ -246,12 +263,15 @@ def run_existing_frames(
                 swapped = face_enhancer.process_frame(
                     None, swapped, frame_path=str(output_frame)
                 )
+            job_control.check_cancelled()
             write_frame(str(output_frame), swapped)
             bar.update(1)
             progress_events.report('Processing existing PNGs', bar.n, len(input_paths))
 
+    job_control.check_cancelled()
     print(f'[FRAMES] Reused {skipped}/{len(input_paths)} completed frames.')
     assemble_frames(work, output_path, fps, len(input_paths))
+    job_control.check_cancelled()
     report = {
         'source_folder': str(Path(frames_folder).resolve()),
         'completed_frames': len(input_paths),
