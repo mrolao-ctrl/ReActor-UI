@@ -107,18 +107,22 @@ def save_settings(values: dict, path=None) -> Path:
 
 
 def recommended_models_directory() -> str:
-    """Reuse existing Windows models without moving/redistributing their weights."""
-    if not getattr(sys, 'frozen', False):
-        return ''
+    """Find existing models first, in both source and installed-script layouts.
+
+    The lightweight Inno Setup installer runs normal pythonw.exe, NOT a frozen
+    executable, so sys.frozen alone cannot identify installed deployments.
+    """
+    checkout = Path(__file__).resolve().parents[1] / 'models'
     candidates = [
+        checkout,
         Path.home() / 'ReActor-Custom' / 'models',
         Path.home() / 'ReActor-UI' / 'models',
     ]
     for folder in candidates:
         if (folder / 'inswapper_128.onnx').is_file():
             return str(folder)
-    root = Path(os.getenv('LOCALAPPDATA', str(Path.home()))) / 'ReActor-Studio' / 'models'
-    return str(root)
+    return str(Path(os.getenv('LOCALAPPDATA', str(Path.home()))) /
+               'ReActor-Studio' / 'models')
 
 
 def apply_to_globals(settings: dict, globals_module, decode_providers=None) -> None:
