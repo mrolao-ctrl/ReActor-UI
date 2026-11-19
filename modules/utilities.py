@@ -22,8 +22,12 @@ if platform.system().lower() == 'darwin':
 
 
 def run_ffmpeg(args: List[str], progress_stage: str = None,
-               progress_total: int = 0) -> bool:
-    commands = ['ffmpeg', '-hide_banner', '-hwaccel', 'auto', '-loglevel', modules.globals.log_level]
+               progress_total: int = 0, *, use_hwaccel: bool = True,
+               raise_on_error: bool = False) -> bool:
+    commands = ['ffmpeg', '-hide_banner']
+    if use_hwaccel:
+        commands.extend(['-hwaccel', 'auto'])
+    commands.extend(['-loglevel', modules.globals.log_level])
     if progress_stage:
         # Progress goes to stdout, without changing the output media pipeline.
         commands.extend(['-progress', 'pipe:1', '-stats_period', '1'])
@@ -48,7 +52,24 @@ def run_ffmpeg(args: List[str], progress_stage: str = None,
         if result == 0:
             progress_events.report(progress_stage, progress_total, progress_total)
         return result == 0
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError) as error:
+        if raise_on_error:
+            output = getattr(error, 'output', None)
+            if isinstance(output, bytes):
+                details = output.decode('utf-8', errors='replace')
+            elif isinstance(output, str):
+                details = output
+            else:
+                details = ''
+            # Last lines usually contain the actual FFmpeg diagnosis. Keep
+            # errors readable in the Windows application popup.
+            details = '\n'.join(details.strip().splitlines()[-12:])[-1800:]
+            exit_code = getattr(error, 'returncode', None)
+            prefix = (f'FFmpeg exited with code {exit_code}' if exit_code is not None
+                      else f'Could not start FFmpeg: {error}')
+            raise RuntimeError(
+                f'{prefix}.\n{details}' if details else prefix
+            ) from error
         return False
 
 
@@ -65,8 +86,20 @@ def detect_fps(target_path: str) -> float:
 
 def extract_frames(target_path: str) -> None:
     temp_directory_path = get_temp_directory_path(target_path)
-    if not run_ffmpeg(['-i', target_path, '-pix_fmt', 'rgb24', os.path.join(temp_directory_path, '%04d.png')]):
-        raise RuntimeError(f'FFmpeg failed extracting video frames to {temp_directory_path}. Check disk space.')
+    # Decode in software: forced auto-hardware decoding may fail on Windows
+    # for formats that otherwise decode correctly. -y also permits a retry
+    # after a previous incomplete extraction left numbered PNGs behind.
+    try:
+        run_ffmpeg(
+            ['-y', '-i', target_path, '-pix_fmt', 'rgb24',
+             os.path.join(temp_directory_path, '%04d.png')],
+            use_hwaccel=False, raise_on_error=True
+        )
+    except RuntimeError as error:
+        raise RuntimeError(
+            f'Could not extract video frames to {temp_directory_path}.\n'
+            f'{error}'
+        ) from error
 
 
 def create_video(target_path: str, fps: float = 30.0) -> None:
@@ -96,7 +129,7 @@ def get_temp_frame_paths(target_path: str) -> List[str]:
 def get_temp_directory_path(target_path: str) -> str:
     target_name, _ = os.path.splitext(os.path.basename(target_path))
     target_directory_path = os.path.dirname(target_path)
-    return os.path.join(target_directory_path, TEMP_DIRECTORY, target_name)
+    return os.path.normpath(os.path.join(target_directory_path, TEMP_DIRECTORY, target_name))
 
 
 def get_temp_output_path(target_path: str) -> str:
