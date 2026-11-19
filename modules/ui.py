@@ -80,18 +80,50 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
 
 
 def _set_app_icon(window) -> None:
-    """Use one branded icon for the main window, previews and tool dialogs."""
-    icon_file = Path(__file__).resolve().parents[1] / 'assets' / 'reactor-studio.png'
-    if not icon_file.is_file():
+    """Use the ReActor icon for the actual Windows taskbar/window, not Python.
+
+    CustomTkinter 5.1.3 sets its own default ICO around 200 ms after window
+    creation unless `iconbitmap()` was called. A plain Tk `iconphoto()`
+    therefore gets overwritten on Windows. Prefer a real ICO here.
+    """
+    assets = Path(__file__).resolve().parents[1] / 'assets'
+    png = assets / 'reactor-studio.png'
+    ico = assets / 'reactor-studio.ico'
+    if os.name == 'nt':
+        try:
+            if not ico.is_file() and png.is_file():
+                # Source checkouts have the PNG but the Windows installer
+                # generates the .ico during its build. Cache a local ICO for
+                # source launches; do not write into the installed program.
+                cache = (Path(os.getenv('LOCALAPPDATA', str(Path.home()))) /
+                         'ReActor-Studio' / 'cache' / 'reactor-studio.ico')
+                if not cache.is_file() or cache.stat().st_mtime < png.stat().st_mtime:
+                    cache.parent.mkdir(parents=True, exist_ok=True)
+                    with Image.open(png) as original:
+                        original.convert('RGBA').save(
+                            cache, format='ICO',
+                            sizes=[(16, 16), (24, 24), (32, 32),
+                                   (48, 48), (64, 64), (128, 128), (256, 256)]
+                        )
+                ico = cache
+            if ico.is_file():
+                window.iconbitmap(str(ico))
+                # Explicit iconbitmap prevents CustomTkinter from replacing
+                # the window icon with its generic icon on a delayed callback.
+                return
+        except (OSError, RuntimeError, ValueError, tk.TclError) as error:
+            print(f'[REACTOR.UI] Windows ICO could not be applied: {error}')
+    if not png.is_file():
         return
     try:
-        with Image.open(icon_file) as opened:
+        with Image.open(png) as opened:
             picture = opened.convert('RGBA')
         image = ImageTk.PhotoImage(picture, master=window)
         window.iconphoto(True, image)
         window._reactor_icon_ref = image
     except (OSError, RuntimeError, tk.TclError) as error:
         print(f'[REACTOR.UI] Could not load optional application icon: {error}')
+
 
 
 def _section(parent, title: str, hint: str = '') -> ctk.CTkFrame:

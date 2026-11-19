@@ -2,6 +2,7 @@
 ; Packages the source code/launcher but not heavy Python runtimes or model weights.
 ; Models and Python dependencies are reused from the user's existing installation.
 #define AppName "ReActor Studio"
+#define TaskbarAppId "MRolao.ReActorStudio"
 #define AppVersion "1.0.3"
 
 [Setup]
@@ -35,8 +36,8 @@ Source: "..\assets\reactor-studio.ico"; DestDir: "{app}\assets"; Flags: ignoreve
 Source: "Start-ReActor.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\reactor-studio.ico"
-Name: "{autodesktop}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\assets\reactor-studio.ico"
+Name: "{autoprograms}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\reactor-studio.ico"; AppUserModelID: "{#TaskbarAppId}"
+Name: "{autodesktop}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\assets\reactor-studio.ico"; AppUserModelID: "{#TaskbarAppId}"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
