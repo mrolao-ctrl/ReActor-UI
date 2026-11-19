@@ -18,6 +18,7 @@ from tqdm import tqdm
 import modules.globals
 from modules import progress_events, job_control
 from modules.frame_io import read_image, write_frame
+from modules.utilities import _windows_subprocess_kwargs
 from modules.frame_recovery import png_is_readable
 
 
@@ -155,8 +156,10 @@ def assemble_frames(folder: Path, output_path: str, fps: float, count: int) -> N
     ]
     print(f'[FRAMES] Encoding {count} frames at {fps} FPS (no audio)...', flush=True)
     progress_events.report('Encoding MP4', 0, count)
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          text=True, bufsize=1) as process:
+    with subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1, **_windows_subprocess_kwargs()
+    ) as process:
         job_control.register_process(process)
         try:
             for line in process.stdout:
@@ -185,7 +188,8 @@ def assemble_frames(folder: Path, output_path: str, fps: float, count: int) -> N
         'ffprobe', '-v', 'error', '-count_frames', '-select_streams', 'v:0',
         '-show_entries', 'stream=nb_read_frames',
         '-of', 'default=noprint_wrappers=1:nokey=1', str(partial)
-    ], check=True, capture_output=True, text=True)
+    ], check=True, capture_output=True, text=True,
+        **_windows_subprocess_kwargs())
     try:
         actual = int(probe.stdout.strip())
     except ValueError as error:
