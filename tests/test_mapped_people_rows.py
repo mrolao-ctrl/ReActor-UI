@@ -6,6 +6,7 @@ installation is needed in CI.
 import ast
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Tuple
 import unittest
 
 import cv2
@@ -63,7 +64,7 @@ class MappedPeopleListTests(unittest.TestCase):
 
     def test_thumbnail_preserves_original_source_aspect_ratio(self):
         ctx = {
-            'Image': Image, 'ImageOps': ImageOps,
+            'Image': Image, 'ImageOps': ImageOps, 'Tuple': Tuple,
             'ctk': SimpleNamespace(CTkImage=lambda **kwargs: kwargs),
         }
         thumbnail = extract('_mapping_thumbnail', ctx)
