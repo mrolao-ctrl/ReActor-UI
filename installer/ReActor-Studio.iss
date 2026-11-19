@@ -18,8 +18,10 @@ OutputBaseFilename=ReActor-Studio-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\reactor-studio.ico
+WizardImageStretch=yes
 DisableProgramGroupPage=yes
-UninstallDisplayIcon={sys}\WindowsPowerShell\v1.0\powershell.exe
+UninstallDisplayIcon={app}\assets\reactor-studio.ico
 DisableWelcomePage=no
 CloseApplications=yes
 
@@ -28,11 +30,13 @@ Source: "..\run.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\modules\*"; DestDir: "{app}\modules"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*,*.pyc"
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\assets\reactor-studio.png"; DestDir: "{app}\assets"; Flags: ignoreversion
+Source: "..\assets\reactor-studio.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "Start-ReActor.ps1"; DestDir: "{app}\installer"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"
-Name: "{autodesktop}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"; IconFilename: "{app}\assets\reactor-studio.ico"
+Name: "{autodesktop}\ReActor Studio"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\installer\Start-ReActor.ps1"""; WorkingDir: "{app}"; Tasks: desktopicon; IconFilename: "{app}\assets\reactor-studio.ico"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
