@@ -24,7 +24,7 @@ class GuideMeVisualThemeTests(unittest.TestCase):
             self.assertEqual('PNG', icon.format)
             self.assertEqual(icon.size[0], icon.size[1])
             self.assertGreaterEqual(icon.size[0], 96)
-            self.assertLess(icon.getpixel((0, 0))[0], 80)
+            self.assertLess(icon.convert('RGB').getpixel((0, 0))[0], 80)
 
     def test_branded_header_keeps_all_existing_controls(self):
         ui = (ROOT / 'modules' / 'ui.py').read_text('utf-8')
