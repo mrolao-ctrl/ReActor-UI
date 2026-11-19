@@ -505,18 +505,36 @@ def compare_enhancer() -> None:
 
 
 def update_assignments_label() -> None:
+    """Update mapped-person count and the last selected source-photo preview."""
+    count = len(modules.globals.face_assignments)
     if assignments_label is not None:
-        count = len(modules.globals.face_assignments)
-        assignments_label.configure(
-            text=f'Mapped people: {count}' if count else
-            'Mapped people: 0 (legacy single-face mode)'
-        )
+        if count:
+            latest = modules.globals.face_assignments[-1]['source_path']
+            assignments_label.configure(
+                text=f'{count} person(s) mapped  ·  Latest source: {Path(latest).name}'
+            )
+        else:
+            assignments_label.configure(
+                text='No people mapped yet. Add a person to start.'
+            )
+    if source_label is not None:
+        if count:
+            latest = modules.globals.face_assignments[-1]['source_path']
+            image = render_image_preview(latest, (190, 160))
+            source_label.configure(image=image, text='')
+            source_label.image = image
+        elif not modules.globals.source_path:
+            source_label.configure(
+                image=None, text='Add a person below to select a source photo'
+            )
+            source_label.image = None
 
 
 def clear_assignments() -> None:
     modules.globals.face_assignments.clear()
     update_assignments_label()
-    update_status('All additional person assignments cleared.')
+    modules.globals.target_face_embedding = None
+    update_status('All person assignments cleared.')
 
 
 def select_frames_directory() -> None:
@@ -545,7 +563,8 @@ def select_frames_directory() -> None:
     modules.globals.frames_directory = folder
     modules.globals.target_path = None
     modules.globals.source_path = None
-    source_label.configure(image=None, text='Source face')
+    source_label.configure(image=None, text='Add a person below to select a source photo')
+    source_label.image = None
     modules.globals.target_face_embedding = None
     modules.globals.face_assignments.clear()
     update_assignments_label()
@@ -648,6 +667,7 @@ def open_face_picker(multiple: bool = False) -> None:
     picker.title('Add person + reference photo' if multiple else 'Choose the person to replace')
     picker.geometry('900x720')
     picker.minsize(650, 650)
+    _bring_dialog_to_front(picker)
 
     info = ctk.CTkLabel(
         picker,
@@ -729,7 +749,7 @@ def open_face_picker(multiple: bool = False) -> None:
                     photo = ctk.filedialog.askopenfilename(
                         title='Select the source photo for this person',
                         initialdir=RECENT_DIRECTORY_SOURCE,
-                        filetypes=[img_ft]
+                        filetypes=[img_ft], parent=picker
                     )
                     if not is_image(photo):
                         feedback.configure(text='Choose a valid source photo to add the person.')
@@ -748,7 +768,6 @@ def open_face_picker(multiple: bool = False) -> None:
                     })
                     modules.globals.target_face_embedding = None
                     modules.globals.many_faces = False
-                    many_faces_switch.deselect()
                     update_assignments_label()
                     update_status(
                         f'{len(modules.globals.face_assignments)} person(s) mapped to source photos.'
@@ -758,7 +777,6 @@ def open_face_picker(multiple: bool = False) -> None:
                     update_assignments_label()
                     modules.globals.target_face_embedding = embedding.copy()
                     modules.globals.many_faces = False
-                    many_faces_switch.deselect()
                     update_status('Single person selected: only that identity will be swapped.')
                 picker.destroy()
                 return
@@ -781,6 +799,7 @@ def open_face_picker(multiple: bool = False) -> None:
     ctk.CTkButton(actions, text='Cancel', command=picker.destroy).pack(side='left', padx=6, pady=5)
 
     load_frame()
+    picker.lift()
 
 
 def select_output_path(start: Callable[[], None]) -> None:
