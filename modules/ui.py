@@ -1,5 +1,9 @@
 import os
+import queue
+import threading
+import traceback
 import tkinter as tk
+from tkinter import messagebox
 import webbrowser
 from pathlib import Path
 import customtkinter as ctk
@@ -9,6 +13,8 @@ from PIL import Image, ImageOps, ImageDraw
 
 import modules.globals
 import modules.metadata
+from modules import progress_events
+from modules.app_settings import load_settings, save_settings, validate, recommended_models_directory
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import normalized_embedding
 from modules.capturer import get_video_frame, get_video_frame_total
@@ -35,6 +41,13 @@ preview_slider = None
 source_label = None
 target_label = None
 status_label = None
+progress_bar = None
+progress_label = None
+start_button = None
+settings_button = None
+preview_button = None
+_UI_EVENTS = queue.Queue()
+_processing_active = False
 
 img_ft, vid_ft = modules.globals.file_types
 
@@ -44,6 +57,8 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
 
     ROOT = create_root(start, destroy)
     PREVIEW = create_preview(ROOT)
+    progress_events.set_sink(_UI_EVENTS.put)
+    ROOT.after(100, _drain_events)
 
     return ROOT
 
@@ -86,7 +101,8 @@ def _bring_dialog_to_front(dialog: ctk.CTkToplevel) -> None:
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label
-    global assignments_label, frames_fps_entry
+    global assignments_label, frames_fps_entry, start_button, settings_button
+    global progress_bar, progress_label, preview_button
 
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode('system')
@@ -96,7 +112,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     root.geometry(f'{ROOT_WIDTH}x{ROOT_HEIGHT}')
     root.minsize(760, 620)
     root.title(f'{modules.metadata.name} {modules.metadata.version} {modules.metadata.edition}')
-    root.protocol('WM_DELETE_WINDOW', lambda: destroy())
+    root.protocol('WM_DELETE_WINDOW', lambda: request_close(destroy))
     root.grid_columnconfigure(0, weight=1)
     root.grid_rowconfigure(1, weight=1)
 
@@ -105,6 +121,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     header.grid(row=0, column=0, sticky='ew')
     header.grid_columnconfigure(0, weight=1)
+    settings_button = ctk.CTkButton(header, text='Settings', width=132, height=36, command=open_settings)
+    settings_button.grid(row=0, column=1, rowspan=2, padx=(6, 24), pady=18, sticky='e')
     ctk.CTkLabel(
         header, text='ReActor  /  Studio', anchor='w',
         font=ctk.CTkFont(size=26, weight='bold')
@@ -326,18 +344,20 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     footer.grid(row=2, column=0, sticky='ew')
     for column in range(3):
         footer.grid_columnconfigure(column, weight=1)
-    ctk.CTkButton(
+    start_button = ctk.CTkButton(
         footer, text='Start processing', height=42,
-        command=lambda: select_output_path(start)
-    ).grid(row=0, column=0, padx=(24, 7), pady=(14, 5), sticky='ew')
-    ctk.CTkButton(
+        command=lambda: select_output_path(lambda: launch_background(start))
+    )
+    start_button.grid(row=0, column=0, padx=(24, 7), pady=(14, 5), sticky='ew')
+    preview_button = ctk.CTkButton(
         footer, text='Preview', height=42, command=toggle_preview,
         fg_color=('#D8EDE2', '#365044'),
         text_color=('#174D32', '#F3FFF8'),
         hover_color=('#C8E0D1', '#446254')
-    ).grid(row=0, column=1, padx=7, pady=(14, 5), sticky='ew')
+    )
+    preview_button.grid(row=0, column=1, padx=7, pady=(14, 5), sticky='ew')
     ctk.CTkButton(
-        footer, text='Close', height=42, command=destroy,
+        footer, text='Close', height=42, command=lambda: request_close(destroy),
         fg_color=('#E8EBE9', '#34413C'),
         text_color=('#345045', '#EBF6F0'),
         hover_color=('#D6DFDA', '#3D5349')
@@ -355,7 +375,12 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         cursor='hand2', text_color=('#288A60', '#6ED5A0'),
         font=ctk.CTkFont(size=12)
     )
-    github.grid(row=2, column=0, columnspan=3, padx=24, pady=(0, 9))
+    progress_bar = ctk.CTkProgressBar(footer, mode='determinate', height=12)
+    progress_bar.set(0)
+    progress_bar.grid(row=2, column=0, columnspan=3, padx=24, pady=(5, 4), sticky='ew')
+    progress_label = ctk.CTkLabel(footer, text='No processing in progress', anchor='w', text_color=('gray40', 'gray70'))
+    progress_label.grid(row=3, column=0, columnspan=3, padx=24, pady=(0, 5), sticky='ew')
+    github.grid(row=4, column=0, columnspan=3, padx=24, pady=(0, 9))
     github.bind('<Button-1>', lambda event: webbrowser.open('https://github.com/Gourieff'))
     return root
 
