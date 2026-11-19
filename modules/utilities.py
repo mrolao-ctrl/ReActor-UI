@@ -144,4 +144,12 @@ def conditional_download(download_directory_path: str, urls: List[str]) -> None:
 
 
 def resolve_relative_path(path: str) -> str:
+    # All existing model consumers use ../models[/filename]. Redirect only
+    # these paths when a user selected a local models folder in Settings.
+    normalized = path.replace('\\', '/')
+    if (normalized == '../models' or normalized.startswith('../models/')):
+        configured = getattr(modules.globals, 'models_directory', '')
+        if configured:
+            suffix = normalized[len('../models'):].lstrip('/')
+            return os.path.abspath(os.path.join(configured, suffix))
     return os.path.abspath(os.path.join(os.path.dirname(__file__), path))
