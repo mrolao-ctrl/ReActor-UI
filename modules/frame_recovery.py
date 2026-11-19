@@ -13,6 +13,7 @@ from typing import Iterable, List
 from PIL import Image
 
 import modules.globals
+from modules import job_control
 
 
 def expected_frame_paths(folder: str, expected_count: int = 0) -> List[str]:
@@ -39,6 +40,7 @@ def png_is_readable(path: str) -> bool:
 
 
 def repair_frames(paths: Iterable[str], stage: str) -> int:
+    job_control.check_cancelled()
     frames = list(paths)
     if not frames:
         raise RuntimeError('There are no frames to repair')
@@ -50,6 +52,7 @@ def repair_frames(paths: Iterable[str], stage: str) -> int:
     good = set(valid)
     repaired = 0
     for index, path in enumerate(frames):
+        job_control.check_cancelled()
         if index in good:
             continue
         pos = bisect.bisect_left(valid, index)
