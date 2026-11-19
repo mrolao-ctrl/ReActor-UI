@@ -17,7 +17,7 @@ DEFAULTS = {
     'video_encoder': 'libx264',
     'keep_fps': True,
     'keep_audio': True,
-    'keep_frames': True,
+    'keep_frames': False,
     'frames_fps': 30.0,
     'occlusion_protection': True,
     'occlusion_landmark_mode': 'auto',
