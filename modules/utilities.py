@@ -11,7 +11,7 @@ from typing import List, Any
 from tqdm import tqdm
 
 import modules.globals
-from modules import progress_events
+from modules import progress_events, job_control
 
 TEMP_FILE = 'temp.mp4'
 TEMP_DIRECTORY = 'temp'
@@ -24,35 +24,54 @@ if platform.system().lower() == 'darwin':
 def run_ffmpeg(args: List[str], progress_stage: str = None,
                progress_total: int = 0, *, use_hwaccel: bool = True,
                raise_on_error: bool = False) -> bool:
+    """Run FFmpeg normally in CLI; monitor/terminate it during GUI jobs."""
+    job_control.check_cancelled()
     commands = ['ffmpeg', '-hide_banner']
     if use_hwaccel:
         commands.extend(['-hwaccel', 'auto'])
     commands.extend(['-loglevel', modules.globals.log_level])
     if progress_stage:
-        # Progress goes to stdout, without changing the output media pipeline.
         commands.extend(['-progress', 'pipe:1', '-stats_period', '1'])
     commands.extend(args)
+
     try:
-        if not progress_stage:
+        if not progress_stage and not job_control.active():
+            # Preserve the original direct command behaviour in headless mode.
             subprocess.check_output(commands, stderr=subprocess.STDOUT)
             return True
-        progress_events.report(progress_stage, 0, progress_total)
+
+        if progress_stage:
+            progress_events.report(progress_stage, 0, progress_total)
         with subprocess.Popen(
             commands, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1
+            text=bool(progress_stage), bufsize=1 if progress_stage else -1
         ) as process:
-            for line in process.stdout:
-                if line.startswith('frame='):
-                    try:
-                        frame = int(line.split('=', 1)[1].strip())
-                    except ValueError:
-                        continue
-                    progress_events.report(progress_stage, frame, progress_total)
-            result = process.wait()
-        if result == 0:
+            job_control.register_process(process)
+            try:
+                if progress_stage:
+                    for line in process.stdout:
+                        job_control.check_cancelled()
+                        if line.startswith('frame='):
+                            try:
+                                frame = int(line.split('=', 1)[1].strip())
+                            except ValueError:
+                                continue
+                            progress_events.report(progress_stage, frame, progress_total)
+                    output = None
+                    result = process.wait()
+                else:
+                    output, _ = process.communicate()
+                    result = process.returncode
+                job_control.check_cancelled()
+                if result:
+                    raise subprocess.CalledProcessError(result, commands, output=output)
+            finally:
+                job_control.unregister_process(process)
+        if progress_stage:
             progress_events.report(progress_stage, progress_total, progress_total)
-        return result == 0
+        return True
     except (OSError, subprocess.SubprocessError) as error:
+        job_control.check_cancelled()
         if raise_on_error:
             output = getattr(error, 'output', None)
             if isinstance(output, bytes):
@@ -61,8 +80,6 @@ def run_ffmpeg(args: List[str], progress_stage: str = None,
                 details = output
             else:
                 details = ''
-            # Last lines usually contain the actual FFmpeg diagnosis. Keep
-            # errors readable in the Windows application popup.
             details = '\n'.join(details.strip().splitlines()[-12:])[-1800:]
             exit_code = getattr(error, 'returncode', None)
             prefix = (f'FFmpeg exited with code {exit_code}' if exit_code is not None
@@ -75,7 +92,9 @@ def run_ffmpeg(args: List[str], progress_stage: str = None,
 
 def detect_fps(target_path: str) -> float:
     command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate', '-of', 'default=noprint_wrappers=1:nokey=1', target_path]
+    job_control.check_cancelled()
     output = subprocess.check_output(command).decode().strip().split('/')
+    job_control.check_cancelled()
     try:
         numerator, denominator = map(int, output)
         return numerator / denominator
@@ -85,6 +104,7 @@ def detect_fps(target_path: str) -> float:
 
 
 def extract_frames(target_path: str) -> None:
+    job_control.check_cancelled()
     temp_directory_path = get_temp_directory_path(target_path)
     # Decode in software: forced auto-hardware decoding may fail on Windows
     # for formats that otherwise decode correctly. -y also permits a retry
@@ -103,6 +123,7 @@ def extract_frames(target_path: str) -> None:
 
 
 def create_video(target_path: str, fps: float = 30.0) -> None:
+    job_control.check_cancelled()
     temp_output_path = get_temp_output_path(target_path)
     temp_directory_path = get_temp_directory_path(target_path)
     frame_count = len(glob.glob(os.path.join(glob.escape(temp_directory_path), '*.png')))
@@ -115,6 +136,7 @@ def create_video(target_path: str, fps: float = 30.0) -> None:
 
 
 def restore_audio(target_path: str, output_path: str) -> None:
+    job_control.check_cancelled()
     temp_output_path = get_temp_output_path(target_path)
     done = run_ffmpeg(['-i', temp_output_path, '-i', target_path, '-c:v', 'copy', '-map', '0:v:0', '-map', '1:a:0', '-y', output_path])
     if not done:
@@ -147,11 +169,13 @@ def normalize_output_path(source_path: str, target_path: str, output_path: str) 
 
 
 def create_temp(target_path: str) -> None:
+    job_control.check_cancelled()
     temp_directory_path = get_temp_directory_path(target_path)
     Path(temp_directory_path).mkdir(parents=True, exist_ok=True)
 
 
 def move_temp(target_path: str, output_path: str) -> None:
+    job_control.check_cancelled()
     temp_output_path = get_temp_output_path(target_path)
     if os.path.isfile(temp_output_path):
         if os.path.isfile(output_path):
