@@ -959,31 +959,50 @@ def select_source_path() -> None:
 
 
 def select_target_path() -> None:
+    """Switch media transactionally, keeping the previous job if preview fails.
+
+    In particular, a previously processed video must not leave OpenCV file
+    handles or stale frame mappings attached to the next selected target.
+    """
     global RECENT_DIRECTORY_TARGET, FRAMES_PREVIEW_PATHS, img_ft, vid_ft
 
-    target_path = ctk.filedialog.askopenfilename(title='select an target image or video', initialdir=RECENT_DIRECTORY_TARGET, filetypes=[img_ft, vid_ft])
+    target_path = ctk.filedialog.askopenfilename(
+        title='Select target image or video',
+        initialdir=RECENT_DIRECTORY_TARGET, filetypes=[img_ft, vid_ft],
+        parent=ROOT
+    )
     if not target_path:
         return
+    try:
+        if is_image(target_path):
+            thumbnail = render_image_preview(target_path, (200, 200))
+        elif is_video(target_path):
+            thumbnail = render_video_preview(target_path, (200, 200))
+        else:
+            update_status('Not a supported image or video file.')
+            return
+    except (OSError, RuntimeError, ValueError, cv2.error) as error:
+        update_status(f'Cannot open selected target: {error}')
+        return
+
+    # Only commit the new target once the preview is successfully generated.
     PREVIEW.withdraw()
-    # Selections for an earlier target must never carry over.
+    modules.globals.target_path = target_path
+    modules.globals.output_path = None
     modules.globals.target_face_embedding = None
     modules.globals.frames_directory = None
+    modules.globals.frame_target_boxes.clear()
+    modules.globals.preview_face_boxes = []
     FRAMES_PREVIEW_PATHS = []
     modules.globals.face_assignments.clear()
     update_assignments_label()
-    if is_image(target_path):
-        modules.globals.target_path = target_path
-        RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
-        image = render_image_preview(modules.globals.target_path, (200, 200))
-        target_label.configure(image=image)
-    elif is_video(target_path):
-        modules.globals.target_path = target_path
-        RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
-        video_frame = render_video_preview(target_path, (200, 200))
-        target_label.configure(image=video_frame)
-    else:
-        modules.globals.target_path = None
-        target_label.configure(image=None)
+    RECENT_DIRECTORY_TARGET = os.path.dirname(target_path)
+    target_label.configure(image=thumbnail, text='')
+    target_label.image = thumbnail
+    update_status(
+        f'Target selected: {Path(target_path).name}. '
+        'Add a person and source photo before starting.'
+    )
 
 
 def open_face_picker(multiple: bool = False) -> None:
@@ -1167,24 +1186,34 @@ def select_output_path(start: Callable[[], None]) -> None:
 
 
 def render_image_preview(image_path: str, size: Tuple[int, int]) -> ctk.CTkImage:
-    image = Image.open(image_path)
+    with Image.open(image_path) as opened:
+        image = opened.convert('RGB')
     if size:
         image = ImageOps.fit(image, size, Image.LANCZOS)
-    return ctk.CTkImage(image, size=image.size)
+    return ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
 
 
-def render_video_preview(video_path: str, size: Tuple[int, int], frame_number: int = 0) -> ctk.CTkImage:
+def render_video_preview(video_path: str, size: Tuple[int, int],
+                         frame_number: int = 0) -> ctk.CTkImage:
+    """Read one frame and *always* release VideoCapture, even on success."""
     capture = cv2.VideoCapture(video_path)
-    if frame_number:
-        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-    has_frame, frame = capture.read()
-    if has_frame:
-        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        if size:
-            image = ImageOps.fit(image, size, Image.LANCZOS)
-        return ctk.CTkImage(image, size=image.size)
-    capture.release()
-    cv2.destroyAllWindows()
+    try:
+        if not capture.isOpened():
+            raise RuntimeError(f'Unable to open video: {Path(video_path).name}')
+        if frame_number:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        has_frame, frame = capture.read()
+        if not has_frame or frame is None:
+            raise RuntimeError(
+                f'Unable to read preview frame: {Path(video_path).name}'
+            )
+    finally:
+        capture.release()
+
+    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    if size:
+        image = ImageOps.fit(image, size, Image.LANCZOS)
+    return ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
 
 
 def toggle_preview() -> None:
