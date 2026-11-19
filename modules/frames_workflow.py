@@ -16,6 +16,7 @@ import subprocess
 from tqdm import tqdm
 
 import modules.globals
+from modules import progress_events
 from modules.frame_io import read_image, write_frame
 from modules.frame_recovery import png_is_readable
 
@@ -148,6 +149,7 @@ def assemble_frames(folder: Path, output_path: str, fps: float, count: int) -> N
         '-progress', 'pipe:1', '-stats_period', '1', str(partial)
     ]
     print(f'[FRAMES] Encoding {count} frames at {fps} FPS (no audio)...', flush=True)
+    progress_events.report('Encoding MP4', 0, count)
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, bufsize=1) as process:
         for line in process.stdout:
@@ -156,6 +158,7 @@ def assemble_frames(folder: Path, output_path: str, fps: float, count: int) -> N
                 number = int(line.split('=', 1)[1].strip())
                 print(f'[FRAMES] Encoded {number}/{count} ({number/count*100:.1f}%)',
                       flush=True)
+                progress_events.report('Encoding MP4', number, count)
             elif line and not line.startswith(('fps=', 'stream_', 'bitrate=', 'total_size=',
                                                'out_time', 'dup_frames=', 'drop_frames=',
                                                'speed=', 'progress=', 'quality=')):
@@ -224,6 +227,7 @@ def run_existing_frames(
     # Each output frame is only written ONCE, after both swap and enhancer.
     # An interrupted / corrupted output frame is rebuilt from untouched input.
     skipped = 0
+    progress_events.report('Processing existing PNGs', 0, len(input_paths))
     with tqdm(total=len(input_paths), desc='Swap existing frames',
               unit='frame', dynamic_ncols=True) as bar:
         for index, original in enumerate(input_paths, 1):
@@ -231,6 +235,7 @@ def run_existing_frames(
             if png_is_readable(str(output_frame)):
                 skipped += 1
                 bar.update(1)
+                progress_events.report('Processing existing PNGs', bar.n, len(input_paths))
                 continue
             frame = read_image(original, 'existing PNG input')
             swapped = face_swapper.process_frame(
@@ -243,6 +248,7 @@ def run_existing_frames(
                 )
             write_frame(str(output_frame), swapped)
             bar.update(1)
+            progress_events.report('Processing existing PNGs', bar.n, len(input_paths))
 
     print(f'[FRAMES] Reused {skipped}/{len(input_paths)} completed frames.')
     assemble_frames(work, output_path, fps, len(input_paths))
