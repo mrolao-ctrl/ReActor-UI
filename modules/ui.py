@@ -1412,6 +1412,7 @@ def open_face_picker(multiple: bool = False) -> None:
         )
 
     def choose_face(event) -> None:
+        global RECENT_DIRECTORY_SOURCE
         # CTkLabel centres the image if its widget is larger than the bitmap.
         width, height = state['display_size']
         offset_x = max(0, (preview.winfo_width() - width) / 2)
@@ -1444,9 +1445,10 @@ def open_face_picker(multiple: bool = False) -> None:
                         if score > 0.92:
                             feedback.configure(
                                 text='This person is already mapped. Choose another person '
-                                     'or clear existing assignments.'
+                                     'or remove that person’s row to replace their photo.'
                             )
                             return
+                    RECENT_DIRECTORY_SOURCE = os.path.dirname(photo)
                     modules.globals.face_assignments.append({
                         'embedding': embedding.copy(),
                         'source_path': photo,
