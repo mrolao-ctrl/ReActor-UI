@@ -211,15 +211,34 @@ def is_video(video_path: str) -> bool:
 
 
 def conditional_download(download_directory_path: str, urls: List[str]) -> None:
+    job_control.check_cancelled()
     if not os.path.exists(download_directory_path):
         os.makedirs(download_directory_path)
     for url in urls:
+        job_control.check_cancelled()
         download_file_path = os.path.join(download_directory_path, os.path.basename(url))
         if not os.path.exists(download_file_path):
-            request = urllib.request.urlopen(url) # type: ignore[attr-defined]
-            total = int(request.headers.get('Content-Length', 0))
-            with tqdm(total=total, desc='Downloading', unit='B', unit_scale=True, unit_divisor=1024) as progress:
-                urllib.request.urlretrieve(url, download_file_path, reporthook=lambda count, block_size, total_size: progress.update(block_size)) # type: ignore[attr-defined]
+            # A cancelled model download must never masquerade as a valid
+            # model file when processing starts again.
+            pending = download_file_path + '.part'
+            try:
+                with urllib.request.urlopen(url) as request:  # type: ignore[attr-defined]
+                    total = int(request.headers.get('Content-Length', 0))
+
+                with tqdm(total=total, desc='Downloading', unit='B',
+                          unit_scale=True, unit_divisor=1024) as progress:
+                    def report_hook(count, block_size, total_size):
+                        job_control.check_cancelled()
+                        progress.update(block_size)
+
+                    urllib.request.urlretrieve(
+                        url, pending, reporthook=report_hook
+                    )  # type: ignore[attr-defined]
+                job_control.check_cancelled()
+                os.replace(pending, download_file_path)
+            finally:
+                if os.path.exists(pending):
+                    os.unlink(pending)
 
 
 def resolve_relative_path(path: str) -> str:
