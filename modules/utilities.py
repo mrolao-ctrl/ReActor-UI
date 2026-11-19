@@ -21,6 +21,17 @@ if platform.system().lower() == 'darwin':
     ssl._create_default_https_context = ssl._create_unverified_context
 
 
+def _windows_subprocess_kwargs() -> dict:
+    """Suppress console windows from FFmpeg/FFprobe launched by pythonw.exe.
+
+    This does not suppress stdout/stderr pipes or in-app progress events.
+    Windows-only: never pass CREATE_NO_WINDOW to other operating systems.
+    """
+    if platform.system().lower() == 'windows':
+        return {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)}
+    return {}
+
+
 def _start_ffmpeg(commands: List[str], **kwargs) -> subprocess.Popen:
     """Spawn FFmpeg, recovering from Windows untrusted-mount launch errors.
 
@@ -30,6 +41,7 @@ def _start_ffmpeg(commands: List[str], **kwargs) -> subprocess.Popen:
     a regular per-user working directory. The input/output paths are not
     changed, preserving per-video PNG folders and resume behaviour.
     """
+    kwargs = {**_windows_subprocess_kwargs(), **kwargs}
     try:
         return subprocess.Popen(commands, **kwargs)
     except OSError as first_error:
@@ -96,7 +108,10 @@ def run_ffmpeg(args: List[str], progress_stage: str = None,
     try:
         if not progress_stage and not job_control.active():
             # Preserve the original direct command behaviour in headless mode.
-            subprocess.check_output(commands, stderr=subprocess.STDOUT)
+            subprocess.check_output(
+                commands, stderr=subprocess.STDOUT,
+                **_windows_subprocess_kwargs()
+            )
             return True
 
         if progress_stage:
@@ -152,7 +167,9 @@ def run_ffmpeg(args: List[str], progress_stage: str = None,
 def detect_fps(target_path: str) -> float:
     command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate', '-of', 'default=noprint_wrappers=1:nokey=1', target_path]
     job_control.check_cancelled()
-    output = subprocess.check_output(command).decode().strip().split('/')
+    output = subprocess.check_output(
+        command, **_windows_subprocess_kwargs()
+    ).decode().strip().split('/')
     job_control.check_cancelled()
     try:
         numerator, denominator = map(int, output)
