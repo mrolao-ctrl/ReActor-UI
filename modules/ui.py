@@ -404,8 +404,123 @@ def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
 
 
 def update_status(text: str) -> None:
-    status_label.configure(text=text)
-    ROOT.update()
+    """Accept status messages from any thread via a GUI event queue."""
+    _UI_EVENTS.put({'type': 'status', 'message': text})
+
+
+def show_warning(title: str, message: str) -> None:
+    """Queue modal dialogs; only Tk's main thread creates them."""
+    _UI_EVENTS.put({'type': 'warning', 'title': title, 'message': message})
+
+
+def _format_duration(seconds) -> str:
+    if seconds is None:
+        return 'calculating'
+    remaining = max(0, int(round(seconds)))
+    if remaining >= 3600:
+        return f'{remaining // 3600}h {(remaining % 3600) // 60:02d}m'
+    if remaining >= 60:
+        return f'{remaining // 60}m {remaining % 60:02d}s'
+    return f'{remaining}s'
+
+
+def _set_controls_enabled(enabled: bool) -> None:
+    """Lock mutable application options while the worker is processing."""
+    state = 'normal' if enabled else 'disabled'
+
+    def descend(widget) -> None:
+        for child in widget.winfo_children():
+            if isinstance(child, (ctk.CTkButton, ctk.CTkSwitch,
+                                  ctk.CTkSlider, ctk.CTkOptionMenu,
+                                  ctk.CTkEntry)):
+                child.configure(state=state)
+            descend(child)
+
+    # The main scrollable section contains all media and processing settings.
+    for widget in ROOT.winfo_children():
+        if isinstance(widget, ctk.CTkScrollableFrame):
+            descend(widget)
+    for widget in (start_button, preview_button, settings_button):
+        if widget is not None:
+            widget.configure(state=state)
+
+
+def _drain_events() -> None:
+    """Apply queued events only on the Tk thread, then schedule next poll."""
+    global _processing_active
+    if ROOT is None or not ROOT.winfo_exists():
+        return
+    for _ in range(200):
+        try:
+            event = _UI_EVENTS.get_nowait()
+        except queue.Empty:
+            break
+        kind = event['type']
+        if kind == 'status':
+            status_label.configure(text=event['message'])
+        elif kind == 'warning':
+            messagebox.showwarning(event['title'], event['message'], parent=ROOT)
+        elif kind == 'error':
+            status_label.configure(text=event['message'])
+            messagebox.showerror('ReActor processing error', event['message'], parent=ROOT)
+        elif kind == 'progress':
+            if progress_bar.cget('mode') != 'determinate':
+                progress_bar.stop()
+                progress_bar.configure(mode='determinate')
+            done, total = event['done'], event['total']
+            percent = (100.0 * done / total) if total else 0.0
+            progress_bar.set(percent / 100.0)
+            rate = event['rate']
+            speed = (f'{rate:.2f} frames/s' if rate >= 1 else
+                     f'{1 / rate:.2f} s/frame' if rate > 0 else 'calculating speed')
+            progress_label.configure(
+                text=f"{event['stage']}  ·  {done}/{total} frames  ·  "
+                     f"{percent:.1f}%  ·  {speed}  ·  ETA {_format_duration(event['eta'])}"
+            )
+        elif kind == 'finished':
+            _processing_active = False
+            _set_controls_enabled(True)
+            if progress_bar.cget('mode') == 'indeterminate':
+                progress_bar.stop()
+                progress_bar.configure(mode='determinate')
+                progress_bar.set(0)
+    ROOT.after(100, _drain_events)
+
+
+def request_close(destroy: Callable[[], None]) -> None:
+    if _processing_active:
+        update_status('Processing is still running. Close is available when it finishes.')
+        return
+    progress_events.set_sink(None)
+    destroy()
+
+
+def launch_background(process: Callable[[], None]) -> None:
+    """Process videos in a worker so Windows continues to repaint the GUI."""
+    global _processing_active
+    if _processing_active:
+        return
+    _processing_active = True
+    progress_events.reset()
+    _set_controls_enabled(False)
+    progress_label.configure(text='Preparing models and processing…')
+    progress_bar.configure(mode='indeterminate')
+    progress_bar.start()
+
+    def worker() -> None:
+        try:
+            process()
+        except Exception as error:
+            traceback.print_exc()
+            _UI_EVENTS.put({
+                'type': 'error',
+                'message': f'{type(error).__name__}: {error}',
+            })
+        finally:
+            _UI_EVENTS.put({'type': 'finished'})
+
+    threading.Thread(target=worker, name='ReActorProcessing',
+                     daemon=True).start()
 
 
 def update_tumbler(var: str, value: bool) -> None:
