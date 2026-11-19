@@ -198,6 +198,26 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
                          padx=(12, 24), pady=18, sticky='e')
 
 
+    # Compact GuideMe-style workflow strip; informational, not clickable.
+    steps = ctk.CTkFrame(header, fg_color='transparent', corner_radius=0)
+    steps.grid(row=3, column=0, columnspan=3, sticky='ew',
+               padx=24, pady=(0, 14))
+    for column, step in enumerate(
+        ('01   SELECT MEDIA', '02   MAP FACES', '03   ENHANCE', '04   EXPORT')
+    ):
+        steps.grid_columnconfigure(column, weight=1)
+        chip = ctk.CTkFrame(
+            steps, fg_color=('#1C2750' if column == 0 else '#121B36'),
+            corner_radius=11, border_width=1,
+            border_color=('#6152D5' if column == 0 else BORDER)
+        )
+        chip.grid(row=0, column=column,
+                  padx=(0, 7) if column < 3 else 0, sticky='ew')
+        ctk.CTkLabel(
+            chip, text=step, text_color=('#E9E5FF' if column == 0 else MUTED),
+            font=ctk.CTkFont(size=11, weight='bold')
+        ).pack(padx=7, pady=9)
+
     content = ctk.CTkScrollableFrame(
         root, fg_color='transparent', corner_radius=0
     )
@@ -411,7 +431,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     for column in range(3):
         footer.grid_columnconfigure(column, weight=1)
     start_button = ctk.CTkButton(
-        footer, text='Start processing', height=44,
+        footer, text='Start processing', height=46,
         command=lambda: select_output_path(lambda: launch_background(start))
     )
     start_button.grid(row=0, column=0, padx=(24, 7), pady=(14, 5), sticky='ew')
@@ -429,7 +449,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         hover_color=SECONDARY_HOVER
     ).grid(row=0, column=2, padx=(7, 24), pady=(14, 5), sticky='ew')
     status_label = ctk.CTkLabel(
-        footer, text='Ready to process locally  ·  Select a video and map a person.',
+        footer, text='●  READY  /  Select your target video and map a source face.',
         anchor='w', justify='left', wraplength=830,
         text_color=MUTED
     )
