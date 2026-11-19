@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import ModuleType
 from typing import Any, List, Callable
 from tqdm import tqdm
+from modules import progress_events
 
 import modules
 import modules.globals                   
@@ -64,9 +65,24 @@ def multi_process_frame(source_path: str, temp_frame_paths: List[str], process_f
             future.result()
 
 
-def process_video(source_path: str, frame_paths: list[str], process_frames: Callable[[str, List[str], Any], None]) -> None:
+class FrameProgress(tqdm):
+    """Preserve the console bar while mirroring completed frames to the GUI."""
+    stage = 'Processing frames'
+
+    def update(self, n=1):
+        result = super().update(n)
+        progress_events.report(self.stage, self.n, self.total or 0)
+        return result
+
+
+def process_video(source_path: str, frame_paths: list[str],
+                  process_frames: Callable[[str, List[str], Any], None],
+                  stage: str = 'Processing frames') -> None:
     progress_bar_format = '{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}{postfix}]'
     total = len(frame_paths)
-    with tqdm(total=total, desc='Processing', unit='frame', dynamic_ncols=True, bar_format=progress_bar_format) as progress:
+    progress_events.report(stage, 0, total)
+    with FrameProgress(total=total, desc='Processing', unit='frame', dynamic_ncols=True, bar_format=progress_bar_format) as progress:
+        progress.stage = stage
         progress.set_postfix({'execution_providers': modules.globals.execution_providers, 'execution_threads': modules.globals.execution_threads, 'max_memory': modules.globals.max_memory})
         multi_process_frame(source_path, frame_paths, process_frames, progress)
+        progress_events.report(stage, progress.n, total)
