@@ -18,6 +18,7 @@ import tensorflow
 
 import modules.globals
 import modules.metadata
+from modules.app_settings import load_settings, recommended_models_directory
 import modules.ui as ui
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.frame_recovery import expected_frame_paths, repair_frames
@@ -33,26 +34,27 @@ warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
 
 def parse_args() -> None:
     signal.signal(signal.SIGINT, lambda signal_number, frame: destroy())
+    saved = load_settings()
     program = argparse.ArgumentParser()
     program.add_argument('-s', '--source', help='select an source image', dest='source_path')
     program.add_argument('-t', '--target', help='select an target image or video', dest='target_path')
     program.add_argument('-o', '--output', help='select output file or directory', dest='output_path')
     program.add_argument('--frames-dir', help='use existing numbered PNG frames instead of a video', dest='frames_dir')
-    program.add_argument('--frames-fps', help='FPS for existing frames mode (no audio)', dest='frames_fps', type=float, default=30.0)
-    program.add_argument('--frame-processor', help='pipeline of frame processors', dest='frame_processor', default=['face_swapper'], choices=['face_swapper', 'face_enhancer'], nargs='+')
-    program.add_argument('--keep-fps', help='keep original fps', dest='keep_fps', action='store_true', default=False)
-    program.add_argument('--keep-audio', help='keep original audio', dest='keep_audio', action='store_true', default=True)
-    program.add_argument('--keep-frames', help='keep temporary frames', dest='keep_frames', action='store_true', default=False)
+    program.add_argument('--frames-fps', help='FPS for existing frames mode (no audio)', dest='frames_fps', type=float, default=saved['frames_fps'])
+    program.add_argument('--frame-processor', help='pipeline of frame processors', dest='frame_processor', default=['face_swapper', 'face_enhancer'] if saved['enhancer_enabled'] else ['face_swapper'], choices=['face_swapper', 'face_enhancer'], nargs='+')
+    program.add_argument('--keep-fps', help='keep original fps', dest='keep_fps', action=argparse.BooleanOptionalAction, default=saved['keep_fps'])
+    program.add_argument('--keep-audio', help='keep original audio', dest='keep_audio', action=argparse.BooleanOptionalAction, default=saved['keep_audio'])
+    program.add_argument('--keep-frames', help='keep temporary frames', dest='keep_frames', action=argparse.BooleanOptionalAction, default=saved['keep_frames'])
     program.add_argument('--many-faces', help='process every face', dest='many_faces', action='store_true', default=False)
-    program.add_argument('--video-encoder', help='adjust output video encoder', dest='video_encoder', default='libx264', choices=['libx264', 'libx265', 'libvpx-vp9'])
-    program.add_argument('--video-quality', help='adjust output video quality', dest='video_quality', type=int, default=18, choices=range(52), metavar='[0-51]')
-    program.add_argument('--enhancer-strength', help='GFPGAN blend strength 0..100', dest='enhancer_strength', type=int, default=40, choices=range(101))
-    program.add_argument('--enhancer-mode', help='face restoration method', dest='enhancer_mode', choices=['gfpgan', 'sharpen'], default='gfpgan')
-    program.add_argument('--occlusion-protection', help='preserve foreground occluders using optional XSeg model', action='store_true', default=True)
-    program.add_argument('--occlusion-landmarks', help='XSeg alignment: auto, visible-side eye+mouth pair, 3 or 5 points', choices=['auto', '2-point-left', '2-point-right', '3-point', '5-point'], default='auto')
-    program.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=suggest_max_memory())
-    program.add_argument('--execution-provider', help='execution provider', dest='execution_provider', default=['cpu'], choices=suggest_execution_providers(), nargs='+')
-    program.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=suggest_execution_threads())
+    program.add_argument('--video-encoder', help='adjust output video encoder', dest='video_encoder', default=saved['video_encoder'], choices=['libx264', 'libx265', 'libvpx-vp9'])
+    program.add_argument('--video-quality', help='adjust output video quality', dest='video_quality', type=int, default=saved['video_quality'], choices=range(52), metavar='[0-51]')
+    program.add_argument('--enhancer-strength', help='GFPGAN blend strength 0..100', dest='enhancer_strength', type=int, default=saved['enhancer_strength'], choices=range(101))
+    program.add_argument('--enhancer-mode', help='face restoration method', dest='enhancer_mode', choices=['gfpgan', 'sharpen'], default='sharpen' if saved['enhancer_mode'] == 'Sharpen only' else 'gfpgan')
+    program.add_argument('--occlusion-protection', help='preserve foreground occluders using optional XSeg model', action=argparse.BooleanOptionalAction, default=saved['occlusion_protection'])
+    program.add_argument('--occlusion-landmarks', help='XSeg alignment: auto, visible-side eye+mouth pair, 3 or 5 points', choices=['auto', '2-point-left', '2-point-right', '3-point', '5-point'], default=saved['occlusion_landmark_mode'])
+    program.add_argument('--max-memory', help='maximum amount of RAM in GB', dest='max_memory', type=int, default=saved['max_memory'])
+    program.add_argument('--execution-provider', help='execution provider', dest='execution_provider', default=[saved['execution_provider']], choices=suggest_execution_providers(), nargs='+')
+    program.add_argument('--execution-threads', help='number of execution threads', dest='execution_threads', type=int, default=saved['execution_threads'])
     program.add_argument('-v', '--version', action='version', version=f'{modules.metadata.name} {modules.metadata.version}')
 
     # register deprecated args
@@ -63,6 +65,7 @@ def parse_args() -> None:
 
     args = program.parse_args()
 
+    modules.globals.models_directory = saved['models_directory'] or recommended_models_directory()
     modules.globals.source_path = args.source_path
     modules.globals.frames_directory = args.frames_dir
     modules.globals.frames_fps = args.frames_fps
@@ -194,8 +197,7 @@ def report_content_rejection(media_type: str) -> None:
     )
     update_status(message, 'REACTOR.SAFETY')
     if not modules.globals.headless and ui.ROOT is not None:
-        from tkinter import messagebox
-        messagebox.showwarning('ReActor - processing stopped', message, parent=ui.ROOT)
+        ui.show_warning('ReActor - processing stopped', message)
 
 
 def start() -> None:
@@ -312,16 +314,31 @@ def destroy() -> None:
     quit()
 
 
+def prepare_models() -> bool:
+    """Download/check models when actually processing, not before Settings opens."""
+    try:
+        for processor in get_frame_processors_modules(modules.globals.frame_processors):
+            if not processor.pre_check():
+                return False
+        return True
+    except (OSError, RuntimeError, ValueError) as error:
+        update_status(f'Model preparation failed: {error}')
+        return False
+
+
 def run() -> None:
     parse_args()
     if not pre_check():
         return
-    for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
-        if not frame_processor.pre_check():
-            return
     limit_resources()
     if modules.globals.headless:
-        start()
+        if prepare_models():
+            start()
     else:
-        window = ui.init(start, destroy)
+        # The user can open Settings and select an existing models directory
+        # before any model download is attempted.
+        def start_from_ui():
+            if prepare_models():
+                start()
+        window = ui.init(start_from_ui, destroy)
         window.mainloop()

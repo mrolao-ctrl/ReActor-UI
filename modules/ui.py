@@ -1,5 +1,9 @@
 import os
+import queue
+import threading
+import traceback
 import tkinter as tk
+from tkinter import messagebox
 import webbrowser
 from pathlib import Path
 import customtkinter as ctk
@@ -9,6 +13,8 @@ from PIL import Image, ImageOps, ImageDraw
 
 import modules.globals
 import modules.metadata
+from modules import progress_events
+from modules.app_settings import load_settings, save_settings, validate, recommended_models_directory
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import normalized_embedding
 from modules.capturer import get_video_frame, get_video_frame_total
@@ -35,6 +41,13 @@ preview_slider = None
 source_label = None
 target_label = None
 status_label = None
+progress_bar = None
+progress_label = None
+start_button = None
+settings_button = None
+preview_button = None
+_UI_EVENTS = queue.Queue()
+_processing_active = False
 
 img_ft, vid_ft = modules.globals.file_types
 
@@ -44,6 +57,8 @@ def init(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
 
     ROOT = create_root(start, destroy)
     PREVIEW = create_preview(ROOT)
+    progress_events.set_sink(_UI_EVENTS.put)
+    ROOT.after(100, _drain_events)
 
     return ROOT
 
@@ -86,7 +101,8 @@ def _bring_dialog_to_front(dialog: ctk.CTkToplevel) -> None:
 
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label
-    global assignments_label, frames_fps_entry
+    global assignments_label, frames_fps_entry, start_button, settings_button
+    global progress_bar, progress_label, preview_button
 
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode('system')
@@ -96,7 +112,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     root.geometry(f'{ROOT_WIDTH}x{ROOT_HEIGHT}')
     root.minsize(760, 620)
     root.title(f'{modules.metadata.name} {modules.metadata.version} {modules.metadata.edition}')
-    root.protocol('WM_DELETE_WINDOW', lambda: destroy())
+    root.protocol('WM_DELETE_WINDOW', lambda: request_close(destroy))
     root.grid_columnconfigure(0, weight=1)
     root.grid_rowconfigure(1, weight=1)
 
@@ -105,6 +121,8 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     header.grid(row=0, column=0, sticky='ew')
     header.grid_columnconfigure(0, weight=1)
+    settings_button = ctk.CTkButton(header, text='Settings', width=132, height=36, command=open_settings)
+    settings_button.grid(row=0, column=1, rowspan=2, padx=(6, 24), pady=18, sticky='e')
     ctk.CTkLabel(
         header, text='ReActor  /  Studio', anchor='w',
         font=ctk.CTkFont(size=26, weight='bold')
@@ -326,18 +344,20 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     footer.grid(row=2, column=0, sticky='ew')
     for column in range(3):
         footer.grid_columnconfigure(column, weight=1)
-    ctk.CTkButton(
+    start_button = ctk.CTkButton(
         footer, text='Start processing', height=42,
-        command=lambda: select_output_path(start)
-    ).grid(row=0, column=0, padx=(24, 7), pady=(14, 5), sticky='ew')
-    ctk.CTkButton(
+        command=lambda: select_output_path(lambda: launch_background(start))
+    )
+    start_button.grid(row=0, column=0, padx=(24, 7), pady=(14, 5), sticky='ew')
+    preview_button = ctk.CTkButton(
         footer, text='Preview', height=42, command=toggle_preview,
         fg_color=('#D8EDE2', '#365044'),
         text_color=('#174D32', '#F3FFF8'),
         hover_color=('#C8E0D1', '#446254')
-    ).grid(row=0, column=1, padx=7, pady=(14, 5), sticky='ew')
+    )
+    preview_button.grid(row=0, column=1, padx=7, pady=(14, 5), sticky='ew')
     ctk.CTkButton(
-        footer, text='Close', height=42, command=destroy,
+        footer, text='Close', height=42, command=lambda: request_close(destroy),
         fg_color=('#E8EBE9', '#34413C'),
         text_color=('#345045', '#EBF6F0'),
         hover_color=('#D6DFDA', '#3D5349')
@@ -355,9 +375,194 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         cursor='hand2', text_color=('#288A60', '#6ED5A0'),
         font=ctk.CTkFont(size=12)
     )
-    github.grid(row=2, column=0, columnspan=3, padx=24, pady=(0, 9))
+    progress_bar = ctk.CTkProgressBar(footer, mode='determinate', height=12)
+    progress_bar.set(0)
+    progress_bar.grid(row=2, column=0, columnspan=3, padx=24, pady=(5, 4), sticky='ew')
+    progress_label = ctk.CTkLabel(footer, text='No processing in progress', anchor='w', text_color=('gray40', 'gray70'))
+    progress_label.grid(row=3, column=0, columnspan=3, padx=24, pady=(0, 5), sticky='ew')
+    github.grid(row=4, column=0, columnspan=3, padx=24, pady=(0, 9))
     github.bind('<Button-1>', lambda event: webbrowser.open('https://github.com/Gourieff'))
     return root
+
+
+def open_settings() -> None:
+    """Edit persistent defaults; existing media and identity mappings stay in RAM."""
+    if _processing_active:
+        update_status('Finish the current processing job before changing Settings.')
+        return
+
+    dialog = ctk.CTkToplevel(ROOT)
+    dialog.title('ReActor Studio · Settings')
+    dialog.geometry('680x700')
+    dialog.minsize(580, 540)
+    _bring_dialog_to_front(dialog)
+
+    ctk.CTkLabel(
+        dialog, text='Application settings',
+        font=ctk.CTkFont(size=24, weight='bold'), anchor='w'
+    ).pack(fill='x', padx=24, pady=(20, 2))
+    ctk.CTkLabel(
+        dialog, text='Saved in your Windows profile; retained after app updates.',
+        text_color=('gray42', 'gray72'), anchor='w'
+    ).pack(fill='x', padx=24, pady=(0, 12))
+
+    content = ctk.CTkScrollableFrame(dialog, fg_color='transparent')
+    content.pack(fill='both', expand=True, padx=18, pady=(0, 8))
+    content.grid_columnconfigure(1, weight=1)
+
+    # Workstation defaults are deliberately CPU / 2 threads / 6 GB / quality 10.
+    current = load_settings()
+    current.update({
+        'keep_fps': bool(modules.globals.keep_fps),
+        'keep_audio': bool(modules.globals.keep_audio),
+        'keep_frames': bool(modules.globals.keep_frames),
+        'occlusion_protection': bool(modules.globals.occlusion_protection),
+        'occlusion_landmark_mode': modules.globals.occlusion_landmark_mode,
+        'enhancer_enabled': bool(modules.globals.fp_ui.get('face_enhancer', False)),
+        'enhancer_mode': modules.globals.enhancer_mode,
+        'enhancer_strength': modules.globals.enhancer_strength,
+        'models_directory': modules.globals.models_directory or recommended_models_directory(),
+    })
+    entries = {}
+
+    def add_entry(row: int, title: str, value, options=None):
+        ctk.CTkLabel(content, text=title, anchor='w').grid(
+            row=row, column=0, padx=(8, 18), pady=11, sticky='w'
+        )
+        if options is None:
+            field = ctk.CTkEntry(content, width=240)
+            field.insert(0, str(value))
+        else:
+            field = ctk.CTkOptionMenu(content, values=options)
+            field.set(str(value))
+        field.grid(row=row, column=1, padx=(4, 8), pady=11, sticky='ew')
+        return field
+
+    # Show only providers available in this installed ONNX Runtime.
+    import onnxruntime
+    provider_map = {
+        'CPUExecutionProvider': 'cpu',
+        'CUDAExecutionProvider': 'cuda',
+        'DmlExecutionProvider': 'dml',
+        'ROCMExecutionProvider': 'rocm',
+        'CoreMLExecutionProvider': 'coreml'
+    }
+    providers = list(dict.fromkeys(
+        ['cpu'] + [provider_map[p] for p in onnxruntime.get_available_providers()
+                   if p in provider_map]
+    ))
+    provider = current.get('execution_provider', 'cpu')
+    if provider not in providers:
+        provider = 'cpu'
+
+    ctk.CTkLabel(
+        content, text='PERFORMANCE',
+        font=ctk.CTkFont(size=14, weight='bold'), anchor='w'
+    ).grid(row=0, column=0, columnspan=2, pady=(8, 3), sticky='ew')
+
+    entries['execution_provider'] = add_entry(1, 'Execution provider', provider, providers)
+    entries['execution_threads'] = add_entry(
+        2, 'Processing threads', modules.globals.execution_threads or current['execution_threads']
+    )
+    entries['max_memory'] = add_entry(
+        3, 'Maximum memory (GB)', modules.globals.max_memory or current['max_memory']
+    )
+    entries['video_quality'] = add_entry(
+        4, 'Video quality CRF (0–51)', modules.globals.video_quality
+        if modules.globals.video_quality is not None else current['video_quality']
+    )
+    entries['video_encoder'] = add_entry(
+        5, 'Video encoder', modules.globals.video_encoder or current['video_encoder'],
+        ['libx264', 'libx265', 'libvpx-vp9']
+    )
+
+    ctk.CTkLabel(
+        content, text='OFFLINE MODELS',
+        font=ctk.CTkFont(size=14, weight='bold'), anchor='w'
+    ).grid(row=6, column=0, columnspan=2, pady=(12, 3), sticky='ew')
+    model_label = ctk.CTkLabel(content, text='Models folder', anchor='w')
+    model_label.grid(row=7, column=0, padx=(8, 18), pady=11, sticky='w')
+    folder = ctk.CTkFrame(content, fg_color='transparent')
+    folder.grid(row=7, column=1, padx=(4, 8), pady=11, sticky='ew')
+    folder.grid_columnconfigure(0, weight=1)
+    entries['models_directory'] = ctk.CTkEntry(folder)
+    entries['models_directory'].insert(0, current['models_directory'])
+    entries['models_directory'].grid(row=0, column=0, padx=(0, 6), sticky='ew')
+
+    def browse_models():
+        selected = ctk.filedialog.askdirectory(
+            parent=dialog, title='Choose folder containing your existing ONNX models'
+        )
+        if selected:
+            entries['models_directory'].delete(0, 'end')
+            entries['models_directory'].insert(0, selected)
+
+    ctk.CTkButton(
+        folder, text='Browse', width=75, command=browse_models
+    ).grid(row=0, column=1, sticky='e')
+
+    ctk.CTkLabel(
+        content,
+        text='Reuse models/inswapper_128.onnx and models/xseg_1.onnx from '
+             'your previous installation. Other InsightFace weights remain in '
+             'your user profile. Models are not included in the installer.',
+        wraplength=560, justify='left', text_color=('gray40', 'gray70')
+    ).grid(row=8, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
+    ctk.CTkLabel(
+        content, text='All current Keep FPS/Audio/Frames, XSeg and Enhancer '
+                      'switches on the main screen are also saved as defaults.',
+        wraplength=560, justify='left', text_color=('gray40', 'gray70')
+    ).grid(row=9, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
+
+    feedback = ctk.CTkLabel(dialog, text='', anchor='w', wraplength=600)
+    feedback.pack(fill='x', padx=24, pady=(0, 8))
+
+    def save():
+        values = dict(current)
+        values.update({key: widget.get() for key, widget in entries.items()})
+        try:
+            values['execution_threads'] = int(values['execution_threads'])
+            values['max_memory'] = int(values['max_memory'])
+            values['video_quality'] = int(values['video_quality'])
+            values['frames_fps'] = float(frames_fps_entry.get().replace(',', '.'))
+        except (ValueError, TypeError):
+            feedback.configure(text='Invalid numeric value (threads, memory, CRF or FPS).')
+            return
+        checked = validate(values)
+        for key in ('execution_threads', 'max_memory', 'video_quality', 'frames_fps'):
+            if checked[key] != values[key]:
+                feedback.configure(text=f'Invalid value for {key}. Check the allowed range.')
+                return
+        if values['models_directory'] and Path(values['models_directory']).exists() and not Path(values['models_directory']).is_dir():
+            feedback.configure(text='The models path is a file, not a folder.')
+            return
+        try:
+            saved_at = save_settings(checked)
+        except OSError as error:
+            feedback.configure(text=f'Could not save settings: {error}')
+            return
+        # Apply ordinary processing values to subsequent jobs in this session.
+        modules.globals.execution_threads = checked['execution_threads']
+        modules.globals.video_quality = checked['video_quality']
+        modules.globals.video_encoder = checked['video_encoder']
+        modules.globals.models_directory = checked['models_directory']
+        modules.globals.frames_fps = checked['frames_fps']
+        frames_fps_entry.delete(0, 'end')
+        frames_fps_entry.insert(0, str(checked['frames_fps']))
+        # Provider and memory cap require restart (loaded models/resource limits).
+        update_status(f'Settings saved to {saved_at}. Restart for provider/memory changes.')
+        dialog.destroy()
+
+    bar = ctk.CTkFrame(dialog, fg_color='transparent')
+    bar.pack(fill='x', padx=24, pady=(0, 20))
+    ctk.CTkButton(bar, text='Save defaults', width=180, height=40,
+                  command=save).pack(side='right')
+    ctk.CTkButton(
+        bar, text='Cancel', width=110, height=40,
+        fg_color=('#E8EBE9', '#34413C'),
+        text_color=('#345045', '#EBF6F0'),
+        command=dialog.destroy
+    ).pack(side='right', padx=(0, 10))
 
 
 def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
@@ -379,8 +584,123 @@ def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
 
 
 def update_status(text: str) -> None:
-    status_label.configure(text=text)
-    ROOT.update()
+    """Accept status messages from any thread via a GUI event queue."""
+    _UI_EVENTS.put({'type': 'status', 'message': text})
+
+
+def show_warning(title: str, message: str) -> None:
+    """Queue modal dialogs; only Tk's main thread creates them."""
+    _UI_EVENTS.put({'type': 'warning', 'title': title, 'message': message})
+
+
+def _format_duration(seconds) -> str:
+    if seconds is None:
+        return 'calculating'
+    remaining = max(0, int(round(seconds)))
+    if remaining >= 3600:
+        return f'{remaining // 3600}h {(remaining % 3600) // 60:02d}m'
+    if remaining >= 60:
+        return f'{remaining // 60}m {remaining % 60:02d}s'
+    return f'{remaining}s'
+
+
+def _set_controls_enabled(enabled: bool) -> None:
+    """Lock mutable application options while the worker is processing."""
+    state = 'normal' if enabled else 'disabled'
+
+    def descend(widget) -> None:
+        for child in widget.winfo_children():
+            if isinstance(child, (ctk.CTkButton, ctk.CTkSwitch,
+                                  ctk.CTkSlider, ctk.CTkOptionMenu,
+                                  ctk.CTkEntry)):
+                child.configure(state=state)
+            descend(child)
+
+    # The main scrollable section contains all media and processing settings.
+    for widget in ROOT.winfo_children():
+        if isinstance(widget, ctk.CTkScrollableFrame):
+            descend(widget)
+    for widget in (start_button, preview_button, settings_button):
+        if widget is not None:
+            widget.configure(state=state)
+
+
+def _drain_events() -> None:
+    """Apply queued events only on the Tk thread, then schedule next poll."""
+    global _processing_active
+    if ROOT is None or not ROOT.winfo_exists():
+        return
+    for _ in range(200):
+        try:
+            event = _UI_EVENTS.get_nowait()
+        except queue.Empty:
+            break
+        kind = event['type']
+        if kind == 'status':
+            status_label.configure(text=event['message'])
+        elif kind == 'warning':
+            messagebox.showwarning(event['title'], event['message'], parent=ROOT)
+        elif kind == 'error':
+            status_label.configure(text=event['message'])
+            messagebox.showerror('ReActor processing error', event['message'], parent=ROOT)
+        elif kind == 'progress':
+            if progress_bar.cget('mode') != 'determinate':
+                progress_bar.stop()
+                progress_bar.configure(mode='determinate')
+            done, total = event['done'], event['total']
+            percent = (100.0 * done / total) if total else 0.0
+            progress_bar.set(percent / 100.0)
+            rate = event['rate']
+            speed = (f'{rate:.2f} frames/s' if rate >= 1 else
+                     f'{1 / rate:.2f} s/frame' if rate > 0 else 'calculating speed')
+            progress_label.configure(
+                text=f"{event['stage']}  ·  {done}/{total} frames  ·  "
+                     f"{percent:.1f}%  ·  {speed}  ·  ETA {_format_duration(event['eta'])}"
+            )
+        elif kind == 'finished':
+            _processing_active = False
+            _set_controls_enabled(True)
+            if progress_bar.cget('mode') == 'indeterminate':
+                progress_bar.stop()
+                progress_bar.configure(mode='determinate')
+                progress_bar.set(0)
+    ROOT.after(100, _drain_events)
+
+
+def request_close(destroy: Callable[[], None]) -> None:
+    if _processing_active:
+        update_status('Processing is still running. Close is available when it finishes.')
+        return
+    progress_events.set_sink(None)
+    destroy()
+
+
+def launch_background(process: Callable[[], None]) -> None:
+    """Process videos in a worker so Windows continues to repaint the GUI."""
+    global _processing_active
+    if _processing_active:
+        return
+    _processing_active = True
+    progress_events.reset()
+    _set_controls_enabled(False)
+    progress_label.configure(text='Preparing models and processing…')
+    progress_bar.configure(mode='indeterminate')
+    progress_bar.start()
+
+    def worker() -> None:
+        try:
+            process()
+        except Exception as error:
+            traceback.print_exc()
+            _UI_EVENTS.put({
+                'type': 'error',
+                'message': f'{type(error).__name__}: {error}',
+            })
+        finally:
+            _UI_EVENTS.put({'type': 'finished'})
+
+    threading.Thread(target=worker, name='ReActorProcessing',
+                     daemon=True).start()
 
 
 def update_tumbler(var: str, value: bool) -> None:
@@ -639,31 +959,50 @@ def select_source_path() -> None:
 
 
 def select_target_path() -> None:
+    """Switch media transactionally, keeping the previous job if preview fails.
+
+    In particular, a previously processed video must not leave OpenCV file
+    handles or stale frame mappings attached to the next selected target.
+    """
     global RECENT_DIRECTORY_TARGET, FRAMES_PREVIEW_PATHS, img_ft, vid_ft
 
-    target_path = ctk.filedialog.askopenfilename(title='select an target image or video', initialdir=RECENT_DIRECTORY_TARGET, filetypes=[img_ft, vid_ft])
+    target_path = ctk.filedialog.askopenfilename(
+        title='Select target image or video',
+        initialdir=RECENT_DIRECTORY_TARGET, filetypes=[img_ft, vid_ft],
+        parent=ROOT
+    )
     if not target_path:
         return
+    try:
+        if is_image(target_path):
+            thumbnail = render_image_preview(target_path, (200, 200))
+        elif is_video(target_path):
+            thumbnail = render_video_preview(target_path, (200, 200))
+        else:
+            update_status('Not a supported image or video file.')
+            return
+    except (OSError, RuntimeError, ValueError, cv2.error) as error:
+        update_status(f'Cannot open selected target: {error}')
+        return
+
+    # Only commit the new target once the preview is successfully generated.
     PREVIEW.withdraw()
-    # Selections for an earlier target must never carry over.
+    modules.globals.target_path = target_path
+    modules.globals.output_path = None
     modules.globals.target_face_embedding = None
     modules.globals.frames_directory = None
+    modules.globals.frame_target_boxes.clear()
+    modules.globals.preview_face_boxes = []
     FRAMES_PREVIEW_PATHS = []
     modules.globals.face_assignments.clear()
     update_assignments_label()
-    if is_image(target_path):
-        modules.globals.target_path = target_path
-        RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
-        image = render_image_preview(modules.globals.target_path, (200, 200))
-        target_label.configure(image=image)
-    elif is_video(target_path):
-        modules.globals.target_path = target_path
-        RECENT_DIRECTORY_TARGET = os.path.dirname(modules.globals.target_path)
-        video_frame = render_video_preview(target_path, (200, 200))
-        target_label.configure(image=video_frame)
-    else:
-        modules.globals.target_path = None
-        target_label.configure(image=None)
+    RECENT_DIRECTORY_TARGET = os.path.dirname(target_path)
+    target_label.configure(image=thumbnail, text='')
+    target_label.image = thumbnail
+    update_status(
+        f'Target selected: {Path(target_path).name}. '
+        'Add a person and source photo before starting.'
+    )
 
 
 def open_face_picker(multiple: bool = False) -> None:
@@ -847,24 +1186,34 @@ def select_output_path(start: Callable[[], None]) -> None:
 
 
 def render_image_preview(image_path: str, size: Tuple[int, int]) -> ctk.CTkImage:
-    image = Image.open(image_path)
+    with Image.open(image_path) as opened:
+        image = opened.convert('RGB')
     if size:
         image = ImageOps.fit(image, size, Image.LANCZOS)
-    return ctk.CTkImage(image, size=image.size)
+    return ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
 
 
-def render_video_preview(video_path: str, size: Tuple[int, int], frame_number: int = 0) -> ctk.CTkImage:
+def render_video_preview(video_path: str, size: Tuple[int, int],
+                         frame_number: int = 0) -> ctk.CTkImage:
+    """Read one frame and *always* release VideoCapture, even on success."""
     capture = cv2.VideoCapture(video_path)
-    if frame_number:
-        capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-    has_frame, frame = capture.read()
-    if has_frame:
-        image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        if size:
-            image = ImageOps.fit(image, size, Image.LANCZOS)
-        return ctk.CTkImage(image, size=image.size)
-    capture.release()
-    cv2.destroyAllWindows()
+    try:
+        if not capture.isOpened():
+            raise RuntimeError(f'Unable to open video: {Path(video_path).name}')
+        if frame_number:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+        has_frame, frame = capture.read()
+        if not has_frame or frame is None:
+            raise RuntimeError(
+                f'Unable to read preview frame: {Path(video_path).name}'
+            )
+    finally:
+        capture.release()
+
+    image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    if size:
+        image = ImageOps.fit(image, size, Image.LANCZOS)
+    return ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
 
 
 def toggle_preview() -> None:

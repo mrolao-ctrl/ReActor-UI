@@ -47,6 +47,7 @@ max_memory = None
 execution_providers: List[str] = []
 execution_threads = None
 headless = None
+models_directory = ''  # Optional existing local models folder (no weights in Git)
 log_level = 'error'
 fp_ui: Dict[str, bool] = {}
 nsfw = None
