@@ -56,15 +56,16 @@ def _section(parent, title: str, hint: str = '') -> ctk.CTkFrame:
         border_color=('#DFE8E5', '#33443F')
     )
     card.grid_columnconfigure(0, weight=1)
+    card.grid_columnconfigure(1, weight=1)
     ctk.CTkLabel(
         card, text=title, anchor='w',
         font=ctk.CTkFont(size=18, weight='bold')
-    ).grid(row=0, column=0, padx=20, pady=(17, 0), sticky='ew')
+    ).grid(row=0, column=0, columnspan=2, padx=20, pady=(17, 0), sticky='ew')
     if hint:
         ctk.CTkLabel(
             card, text=hint, anchor='w',
             text_color=('gray42', 'gray68'), wraplength=780
-        ).grid(row=1, column=0, padx=20, pady=(0, 12), sticky='ew')
+        ).grid(row=1, column=0, columnspan=2, padx=20, pady=(0, 12), sticky='ew')
     return card
 
 
@@ -457,6 +458,17 @@ def compare_enhancer() -> None:
         '<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all'))
     )
 
+    def wheel_scroll(event) -> None:
+        # Shift + wheel scrolls left/right. Ordinary wheel scrolls vertically.
+        units = int(-event.delta / 120) if event.delta else 0
+        if event.state & 0x1:
+            canvas.xview_scroll(units, 'units')
+        else:
+            canvas.yview_scroll(units, 'units')
+
+    canvas.bind('<MouseWheel>', wheel_scroll)
+    contents.bind('<MouseWheel>', wheel_scroll)
+
     ctk.CTkLabel(
         comparison,
         text='Actual frame resolution · Scroll to inspect details · Preview only; no video files changed.',
@@ -496,6 +508,8 @@ def compare_enhancer() -> None:
             preview = ctk.CTkLabel(card, image=shown, text='')
             preview.image = shown  # Preserve the complete image object in memory.
             preview.pack(padx=14, pady=(0, 14))
+            preview.bind('<MouseWheel>', wheel_scroll)
+            card.bind('<MouseWheel>', wheel_scroll)
         contents.update_idletasks()
         canvas.configure(scrollregion=canvas.bbox('all'))
         instruction.configure(text='Ready. Compare the full-size results by scrolling down.')
