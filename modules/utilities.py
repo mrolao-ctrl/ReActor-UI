@@ -11,6 +11,7 @@ from typing import List, Any
 from tqdm import tqdm
 
 import modules.globals
+from modules import progress_events
 
 TEMP_FILE = 'temp.mp4'
 TEMP_DIRECTORY = 'temp'
@@ -20,15 +21,35 @@ if platform.system().lower() == 'darwin':
     ssl._create_default_https_context = ssl._create_unverified_context
 
 
-def run_ffmpeg(args: List[str]) -> bool:
+def run_ffmpeg(args: List[str], progress_stage: str = None,
+               progress_total: int = 0) -> bool:
     commands = ['ffmpeg', '-hide_banner', '-hwaccel', 'auto', '-loglevel', modules.globals.log_level]
+    if progress_stage:
+        # Progress goes to stdout, without changing the output media pipeline.
+        commands.extend(['-progress', 'pipe:1', '-stats_period', '1'])
     commands.extend(args)
     try:
-        subprocess.check_output(commands, stderr=subprocess.STDOUT)
-        return True
-    except Exception:
-        pass
-    return False
+        if not progress_stage:
+            subprocess.check_output(commands, stderr=subprocess.STDOUT)
+            return True
+        progress_events.report(progress_stage, 0, progress_total)
+        with subprocess.Popen(
+            commands, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1
+        ) as process:
+            for line in process.stdout:
+                if line.startswith('frame='):
+                    try:
+                        frame = int(line.split('=', 1)[1].strip())
+                    except ValueError:
+                        continue
+                    progress_events.report(progress_stage, frame, progress_total)
+            result = process.wait()
+        if result == 0:
+            progress_events.report(progress_stage, progress_total, progress_total)
+        return result == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def detect_fps(target_path: str) -> float:
@@ -51,7 +72,8 @@ def extract_frames(target_path: str) -> None:
 def create_video(target_path: str, fps: float = 30.0) -> None:
     temp_output_path = get_temp_output_path(target_path)
     temp_directory_path = get_temp_directory_path(target_path)
-    if not run_ffmpeg(['-r', str(fps), '-i', os.path.join(temp_directory_path, '%04d.png'), '-c:v', modules.globals.video_encoder, '-crf', str(modules.globals.video_quality), '-pix_fmt', 'yuv420p', '-vf', 'colorspace=bt709:iall=bt601-6-625:fast=1', '-y', temp_output_path]):
+    frame_count = len(glob.glob(os.path.join(glob.escape(temp_directory_path), '*.png')))
+    if not run_ffmpeg(['-r', str(fps), '-i', os.path.join(temp_directory_path, '%04d.png'), '-c:v', modules.globals.video_encoder, '-crf', str(modules.globals.video_quality), '-pix_fmt', 'yuv420p', '-vf', 'colorspace=bt709:iall=bt601-6-625:fast=1', '-y', temp_output_path], progress_stage='Encoding MP4', progress_total=frame_count):
         raise RuntimeError(
             f'FFmpeg failed creating the video from {temp_directory_path}. '
             'One or more PNG frames may be missing or corrupt. '
