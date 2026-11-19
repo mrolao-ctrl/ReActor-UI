@@ -1,4 +1,12 @@
 # ReActor 1.0.3 Portable
+
+## Windows custom build (ReActor Studio)
+
+This fork includes a **Windows installer**, a persistent **Settings** page,
+and **in-app progress** for video Face Swap, Enhancer and existing PNG frames.
+See [Windows installer and live progress](docs/WINDOWS_INSTALLER.md)
+for downloads, the existing Python environment requirement, local models
+and setup instructions.
 ### The Fast and Simple "roop-based*" FaceSwap application with a lot of improvements and with no forced NSFW** filter (uncensored, use it on your own responsibility)
 
 > *[original roop](https://github.com/s0md3v/roop) is discontinued<br>
