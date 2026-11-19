@@ -42,7 +42,7 @@ class MappedPeopleListTests(unittest.TestCase):
         cropped = crop(frame, (35, 30, 55, 50))
 
         self.assertIsInstance(cropped, Image.Image)
-        self.assertEqual((24, 24), cropped.size)  # 12% per side
+        self.assertEqual((25, 25), cropped.size)  # 12% per side; integer bounds
         self.assertEqual((201, 43, 17), cropped.getpixel((12, 12)))
         np.testing.assert_array_equal(before, frame)
         # The crop must not alias the source frame buffer.
