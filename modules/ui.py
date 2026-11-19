@@ -533,8 +533,8 @@ def open_settings() -> None:
             if checked[key] != values[key]:
                 feedback.configure(text=f'Invalid value for {key}. Check the allowed range.')
                 return
-        if values['models_directory'] and not Path(values['models_directory']).is_dir():
-            feedback.configure(text='Choose an existing models directory.')
+        if values['models_directory'] and Path(values['models_directory']).exists() and not Path(values['models_directory']).is_dir():
+            feedback.configure(text='The models path is a file, not a folder.')
             return
         try:
             saved_at = save_settings(checked)
@@ -547,6 +547,8 @@ def open_settings() -> None:
         modules.globals.video_encoder = checked['video_encoder']
         modules.globals.models_directory = checked['models_directory']
         modules.globals.frames_fps = checked['frames_fps']
+        frames_fps_entry.delete(0, 'end')
+        frames_fps_entry.insert(0, str(checked['frames_fps']))
         # Provider and memory cap require restart (loaded models/resource limits).
         update_status(f'Settings saved to {saved_at}. Restart for provider/memory changes.')
         dialog.destroy()
