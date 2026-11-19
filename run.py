@@ -14,6 +14,12 @@ if sys.stdout is None or sys.stderr is None:
     if sys.stderr is None:
         sys.stderr = stream
 
+from modules.windows_app_identity import set_windows_app_id
+
+# Assign our identity before importing the GUI or creating a Tk window.
+# The Inno Setup shortcuts use the same stable AppUserModelID.
+set_windows_app_id()
+
 from modules import core
 
 if __name__ == '__main__':
