@@ -13,7 +13,7 @@ from PIL import Image, ImageOps, ImageDraw, ImageTk
 
 import modules.globals
 import modules.metadata
-from modules import progress_events
+from modules import progress_events, job_control
 from modules.app_settings import load_settings, save_settings, validate, recommended_models_directory
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import normalized_embedding
@@ -47,8 +47,10 @@ progress_label = None
 start_button = None
 settings_button = None
 preview_button = None
+close_button = None
 _UI_EVENTS = queue.Queue()
 _processing_active = False
+_abort_requested = False
 
 # GuideMe design tokens, based on the current Android/web dark theme.
 # Keep these independent of processing, identity detection, and model settings.
@@ -206,7 +208,7 @@ def _bring_dialog_to_front(dialog: ctk.CTkToplevel) -> None:
 def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.CTk:
     global source_label, target_label, status_label
     global assignments_label, assignments_list, frames_fps_entry, start_button, settings_button
-    global progress_bar, progress_label, preview_button
+    global progress_bar, progress_label, preview_button, close_button
 
     ctk.deactivate_automatic_dpi_awareness()
     ctk.set_appearance_mode('dark')
@@ -553,12 +555,14 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
         hover_color=SECONDARY_HOVER
     )
     preview_button.grid(row=0, column=1, padx=7, pady=(14, 5), sticky='ew')
-    ctk.CTkButton(
-        footer, text='Close', height=44, command=lambda: request_close(destroy),
+    close_button = ctk.CTkButton(
+        footer, text='Close', height=44,
+        command=lambda: abort_or_close(destroy),
         fg_color=SECONDARY_BG,
         text_color=TEXT,
         hover_color=SECONDARY_HOVER
-    ).grid(row=0, column=2, padx=(7, 24), pady=(14, 5), sticky='ew')
+    )
+    close_button.grid(row=0, column=2, padx=(7, 24), pady=(14, 5), sticky='ew')
     status_label = ctk.CTkLabel(
         footer, text='●  READY  /  Select your target video and map a source face.',
         anchor='w', justify='left', wraplength=830,
@@ -826,7 +830,7 @@ def _set_controls_enabled(enabled: bool) -> None:
 
 def _drain_events() -> None:
     """Apply queued events only on the Tk thread, then schedule next poll."""
-    global _processing_active
+    global _processing_active, _abort_requested
     if ROOT is None or not ROOT.winfo_exists():
         return
     for _ in range(200):
@@ -836,13 +840,16 @@ def _drain_events() -> None:
             break
         kind = event['type']
         if kind == 'status':
-            status_label.configure(text=event['message'])
+            if not _abort_requested:
+                status_label.configure(text=event['message'])
         elif kind == 'warning':
             messagebox.showwarning(event['title'], event['message'], parent=ROOT)
         elif kind == 'error':
             status_label.configure(text=event['message'])
             messagebox.showerror('ReActor processing error', event['message'], parent=ROOT)
         elif kind == 'progress':
+            if _abort_requested:
+                continue
             if progress_bar.cget('mode') != 'determinate':
                 progress_bar.stop()
                 progress_bar.configure(mode='determinate')
@@ -858,45 +865,95 @@ def _drain_events() -> None:
             )
         elif kind == 'finished':
             _processing_active = False
+            aborted = event.get('aborted', False)
+            _abort_requested = False
             _set_controls_enabled(True)
+            close_button.configure(
+                text='Close', state='normal', fg_color=SECONDARY_BG,
+                hover_color=SECONDARY_HOVER
+            )
             if progress_bar.cget('mode') == 'indeterminate':
                 progress_bar.stop()
                 progress_bar.configure(mode='determinate')
+            if aborted:
                 progress_bar.set(0)
+                progress_label.configure(
+                    text='Processing aborted. Start again with the same video and mappings.'
+                )
+                status_label.configure(
+                    text='●  ABORTED  /  Input video, source photos and settings preserved.'
+                )
     ROOT.after(100, _drain_events)
+
+
+def abort_or_close(destroy: Callable[[], None]) -> None:
+    """The footer action switches from Close to Abort during processing."""
+    if _processing_active:
+        request_abort()
+    else:
+        request_close(destroy)
+
+
+def request_abort() -> None:
+    """Ask workers/FFmpeg to stop; only unlock once every worker is done."""
+    global _abort_requested
+    if not _processing_active or _abort_requested:
+        return
+    if job_control.request_abort():
+        _abort_requested = True
+        close_button.configure(text='Aborting…', state='disabled')
+        status_label.configure(text='●  ABORTING  /  Stopping active processing safely…')
+        progress_label.configure(text='Stopping FFmpeg and frame processing…')
 
 
 def request_close(destroy: Callable[[], None]) -> None:
     if _processing_active:
-        update_status('Processing is still running. Close is available when it finishes.')
+        update_status('Processing is running. Use Abort to stop before closing.')
         return
     progress_events.set_sink(None)
     destroy()
 
 
 def launch_background(process: Callable[[], None]) -> None:
-    """Process videos in a worker so Windows continues to repaint the GUI."""
-    global _processing_active
+    """Run a cancellable job without touching media/mappings on Abort."""
+    global _processing_active, _abort_requested
     if _processing_active:
         return
+    job_control.begin()
     _processing_active = True
+    _abort_requested = False
     progress_events.reset()
     _set_controls_enabled(False)
+    close_button.configure(
+        text='Abort', state='normal',
+        fg_color='#933653', hover_color='#B94766'
+    )
     progress_label.configure(text='Preparing models and processing…')
     progress_bar.configure(mode='indeterminate')
     progress_bar.start()
 
     def worker() -> None:
+        aborted = False
         try:
+            job_control.check_cancelled()
             process()
+            job_control.check_cancelled()
+        except job_control.ProcessingAborted:
+            aborted = True
         except Exception as error:
-            traceback.print_exc()
-            _UI_EVENTS.put({
-                'type': 'error',
-                'message': f'{type(error).__name__}: {error}',
-            })
+            if job_control.requested():
+                aborted = True
+            else:
+                traceback.print_exc()
+                _UI_EVENTS.put({
+                    'type': 'error',
+                    'message': f'{type(error).__name__}: {error}',
+                })
         finally:
-            _UI_EVENTS.put({'type': 'finished'})
+            aborted = aborted or job_control.requested()
+            # The work must have truly exited before enabling Start/Close.
+            job_control.finish()
+            _UI_EVENTS.put({'type': 'finished', 'aborted': aborted})
 
     threading.Thread(target=worker, name='ReActorProcessing',
                      daemon=True).start()
