@@ -4,6 +4,7 @@ import os
 import threading
 import gfpgan
 
+from modules import job_control
 import modules.globals
 import modules.processors.frame.core
 from modules.core import update_status
@@ -121,6 +122,7 @@ def process_frame(
 
 def process_frames(source_path: str, temp_frame_paths: List[str], progress: Any = None) -> None:
     for temp_frame_path in temp_frame_paths:
+        job_control.check_cancelled()
         try:
             temp_frame = read_image(temp_frame_path, 'frame for face enhancement')
         except UnreadableFrameError as error:
@@ -129,6 +131,7 @@ def process_frames(source_path: str, temp_frame_paths: List[str], progress: Any 
                 progress.update(1)
             continue
         result = process_frame(None, temp_frame, frame_path=temp_frame_path)
+        job_control.check_cancelled()
         write_frame(temp_frame_path, result)
         if progress:
             progress.update(1)
@@ -137,9 +140,11 @@ def process_frames(source_path: str, temp_frame_paths: List[str], progress: Any 
 def process_image(source_path: str, target_path: str, output_path: str) -> None:
     target_frame = read_image(target_path, 'target image for face enhancement')
     result = process_frame(None, target_frame)
+    job_control.check_cancelled()
     if not cv2.imwrite(output_path, result):
         raise RuntimeError(f'Could not write image: {output_path}')
 
 
 def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
+    job_control.check_cancelled()
     modules.processors.frame.core.process_video(None, temp_frame_paths, process_frames, stage='Face Enhancer')
