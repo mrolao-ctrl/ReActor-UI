@@ -1551,6 +1551,10 @@ def open_face_picker(multiple: bool = False) -> None:
 def select_output_path(start: Callable[[], None]) -> None:
     global RECENT_DIRECTORY_OUTPUT, img_ft, vid_ft
 
+    # An aborted job keeps its previous output name and destination as well.
+    previous_output = modules.globals.output_path
+    output_dir = (os.path.dirname(previous_output) if previous_output
+                  else RECENT_DIRECTORY_OUTPUT)
     if modules.globals.frames_directory:
         try:
             value = float(frames_fps_entry.get().replace(',', '.'))
@@ -1563,13 +1567,14 @@ def select_output_path(start: Callable[[], None]) -> None:
         output_path = ctk.filedialog.asksaveasfilename(
             title='Output MP4 (reusable for resume)',
             filetypes=[('MP4 video', '*.mp4')], defaultextension='.mp4',
-            initialfile=Path(modules.globals.frames_directory).name + '_edited.mp4',
-            initialdir=RECENT_DIRECTORY_OUTPUT
+            initialfile=(Path(previous_output).name if previous_output
+                         else Path(modules.globals.frames_directory).name + '_edited.mp4'),
+            initialdir=output_dir
         )
     elif is_image(modules.globals.target_path):
-        output_path = ctk.filedialog.asksaveasfilename(title='save image output file', filetypes=[img_ft], defaultextension='.png', initialfile='output.png', initialdir=RECENT_DIRECTORY_OUTPUT)
+        output_path = ctk.filedialog.asksaveasfilename(title='save image output file', filetypes=[img_ft], defaultextension='.png', initialfile=Path(previous_output).name if previous_output else 'output.png', initialdir=output_dir)
     elif is_video(modules.globals.target_path):
-        output_path = ctk.filedialog.asksaveasfilename(title='save video output file', filetypes=[vid_ft], defaultextension='.mp4', initialfile='output.mp4', initialdir=RECENT_DIRECTORY_OUTPUT)
+        output_path = ctk.filedialog.asksaveasfilename(title='save video output file', filetypes=[vid_ft], defaultextension='.mp4', initialfile=Path(previous_output).name if previous_output else 'output.mp4', initialdir=output_dir)
     else:
         output_path = None
     if output_path:
