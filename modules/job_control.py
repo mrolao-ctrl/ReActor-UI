@@ -91,5 +91,6 @@ def finish() -> None:
     with _lock:
         _active = False
         _processes.clear()
-        # The next begin() clears the stop flag. Keeping it until then
-        # ensures late callbacks from this job cannot resume processing.
+        # All workers have finished, so do not leak an aborted state into
+        # idle previews or independent headless operations.
+        _stop_event.clear()
