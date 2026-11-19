@@ -21,6 +21,65 @@ if platform.system().lower() == 'darwin':
     ssl._create_default_https_context = ssl._create_unverified_context
 
 
+def _start_ffmpeg(commands: List[str], **kwargs) -> subprocess.Popen:
+    """Spawn FFmpeg, recovering from Windows untrusted-mount launch errors.
+
+    WinError 448 is reported by CreateProcess *before* FFmpeg can inspect
+    the input video or output frames. The initial launch remains unchanged.
+    Only if Windows rejects it do we retry the resolved ffmpeg.exe path from
+    a regular per-user working directory. The input/output paths are not
+    changed, preserving per-video PNG folders and resume behaviour.
+    """
+    try:
+        return subprocess.Popen(commands, **kwargs)
+    except OSError as first_error:
+        if (platform.system().lower() != 'windows'
+                or getattr(first_error, 'winerror', None) != 448):
+            raise
+
+        original_cwd = os.getcwd()
+        located = shutil.which(commands[0])
+        if not located:
+            raise RuntimeError(
+                f'Windows blocked the FFmpeg launch (WinError 448). '
+                f'FFmpeg is not available on PATH. Working directory: '
+                f'{original_cwd}.'
+            ) from first_error
+        try:
+            resolved = os.path.realpath(located)
+        except OSError:
+            resolved = located
+
+        work_root = os.environ.get('LOCALAPPDATA') or os.environ.get('TEMP')
+        if not work_root:
+            raise RuntimeError(
+                f'Windows blocked FFmpeg (WinError 448). '
+                f'FFmpeg executable: {located}. Working directory: '
+                f'{original_cwd}. Configure a standard LOCALAPPDATA directory.'
+            ) from first_error
+        safe_cwd = Path(work_root) / 'ReActor-Studio' / 'ffmpeg-work'
+        try:
+            safe_cwd.mkdir(parents=True, exist_ok=True)
+            print(
+                f'[REACTOR.FFMPEG] WinError 448 starting {located} from '
+                f'{original_cwd}; retrying {resolved} from {safe_cwd}',
+                flush=True
+            )
+            return subprocess.Popen(
+                [resolved, *commands[1:]], cwd=str(safe_cwd), **kwargs
+            )
+        except OSError as retry_error:
+            raise RuntimeError(
+                f'Windows prevented FFmpeg from starting (WinError 448: '
+                f'untrusted mount point). Original executable: {located}. '
+                f'Resolved executable: {resolved}. Original working '
+                f'directory: {original_cwd}. Retry directory: {safe_cwd}. '
+                f'Retry failed: {retry_error}. '
+                f'Install ffmpeg.exe in a normal local Windows folder '
+                f'(not a symbolic link/junction) and add it to PATH.'
+            ) from retry_error
+
+
 def run_ffmpeg(args: List[str], progress_stage: str = None,
                progress_total: int = 0, *, use_hwaccel: bool = True,
                raise_on_error: bool = False) -> bool:
@@ -42,7 +101,7 @@ def run_ffmpeg(args: List[str], progress_stage: str = None,
 
         if progress_stage:
             progress_events.report(progress_stage, 0, progress_total)
-        with subprocess.Popen(
+        with _start_ffmpeg(
             commands, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=bool(progress_stage), bufsize=1 if progress_stage else -1
         ) as process:
