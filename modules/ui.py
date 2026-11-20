@@ -1808,6 +1808,7 @@ def open_preview_frame_picker() -> None:
         generate_button.configure(state='disabled')
         feedback.configure(text='Generating preview for selected frame…')
         picker.update_idletasks()
+        error_message = None
         try:
             success = update_preview(
                 index,
@@ -1816,8 +1817,8 @@ def open_preview_frame_picker() -> None:
             )
         except Exception as error:
             traceback.print_exc()
-            feedback.configure(text=f'Preview failed: {error}')
-            update_status(f'Preview failed: {error}')
+            error_message = f'Preview failed: {error}'
+            update_status(error_message)
             success = False
 
         if not picker.winfo_exists():
@@ -1832,7 +1833,9 @@ def open_preview_frame_picker() -> None:
             )
             generate_button.configure(state='normal', text='Regenerate preview')
         else:
-            feedback.configure(text='Preview not generated. Try another frame.')
+            feedback.configure(
+                text=error_message or 'Preview not generated. Try another frame.'
+            )
             generate_button.configure(state='normal', text='Generate preview')
 
     def step_frame(delta: int) -> None:
