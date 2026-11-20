@@ -108,8 +108,11 @@ def job_fingerprint(folder: str, output_path: str, sources: list,
         'video_quality': modules.globals.video_quality,
         'video_encoder': modules.globals.video_encoder,
         'many_faces': modules.globals.many_faces,
-        'vr_stereo_mode': bool(modules.globals.vr_stereo_mode),
     }
+    # Keep the original fingerprint byte-for-byte when VR is OFF, so older
+    # resumable jobs from previous versions still work without invalidation.
+    if modules.globals.vr_stereo_mode:
+        record['vr_stereo_mode'] = True
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode('utf-8')).hexdigest()
 
 
