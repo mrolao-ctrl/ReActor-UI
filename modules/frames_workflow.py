@@ -108,6 +108,7 @@ def job_fingerprint(folder: str, output_path: str, sources: list,
         'video_quality': modules.globals.video_quality,
         'video_encoder': modules.globals.video_encoder,
         'many_faces': modules.globals.many_faces,
+        'vr_stereo_mode': bool(modules.globals.vr_stereo_mode),
     }
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode('utf-8')).hexdigest()
 
