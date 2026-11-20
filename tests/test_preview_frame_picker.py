@@ -65,9 +65,12 @@ class PreviewFrameSelectionTests(unittest.TestCase):
         self.assertIn("text='Generate preview'", picker)
         self.assertIn("text='Cancel'", picker)
         self.assertIn('PREVIEW_FRAME_INDEX = index', picker)
-        self.assertIn('show_processed_preview(index)', picker)
+        self.assertIn('update_preview(', picker)
+        self.assertIn('destination_label=frame_label', picker)
+        self.assertIn('state[\'processed\'] = True', picker)
+        self.assertNotIn('show_processed_preview(index)', picker)
+        self.assertNotIn('close_picker()\n        ROOT.after(10', picker)
         self.assertNotIn('face_swapper.process_frame(', picker)
-        self.assertNotIn('update_preview(index)', picker)
 
     def test_popup_reserves_visible_footer_before_expandable_media(self):
         picker = source_for('open_preview_frame_picker')
@@ -98,17 +101,34 @@ class PreviewFrameSelectionTests(unittest.TestCase):
         self.assertIn("text='Generate preview'", picker)
         self.assertIn('fg_color=PURPLE, hover_color=PURPLE_HOVER', picker)
 
-    def test_processed_result_reuses_old_face_swap_pipeline(self):
-        processed = source_for('show_processed_preview')
+    def test_processed_result_reuses_existing_swap_and_enhancement_pipeline(self):
         render = source_for('update_preview')
-        result_window = source_for('create_preview')
-        self.assertIn('if update_preview(index):', processed)
-        self.assertIn('PREVIEW.deiconify()', processed)
+        picker = source_for('open_preview_frame_picker')
         self.assertIn('face_swapper.prepare_multi_assignments()', render)
         self.assertIn('processor.process_frame(source, temp_frame)', render)
-        self.assertIn('preview_label.configure(image=displayed)', render)
-        self.assertIn("preview.protocol('WM_DELETE_WINDOW', preview.withdraw)", result_window)
-        self.assertNotIn('CTkSlider', result_window)
+        self.assertIn('label = destination_label if destination_label is not None else preview_label', render)
+        self.assertIn('label.configure(image=displayed, text=\'\')', render)
+        self.assertIn('display_bounds or (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)', render)
+        self.assertIn('ImageOps.contain(', render)
+        self.assertIn('label.image = displayed', render)
+        self.assertIn('generate_button.configure(state=\'disabled\')', picker)
+        self.assertIn('picker.update_idletasks()', picker)
+        self.assertIn('state[\'processed\'] = True', picker)
+        self.assertNotIn('PREVIEW.deiconify()', picker)
+        self.assertNotIn('picker.destroy()\n        # Let the picker', picker)
+
+    def test_navigating_away_discards_processed_image_and_loads_original(self):
+        picker = source_for('open_preview_frame_picker')
+        schedule = picker[picker.index('    def schedule_frame('):picker.index('    picker_slider.configure(')]
+        self.assertIn("state['processed'] = False", schedule)
+        self.assertIn("frame_label.configure(image=None, text='Loading original frame…')", schedule)
+        self.assertIn('frame_label.image = None', schedule)
+        self.assertIn('picker.after(120, load_original_frame)', schedule)
+        load = picker[picker.index('    def load_original_frame('):picker.index('    def schedule_frame(')]
+        self.assertIn('frame = preview_target_frame(index)', load)
+        self.assertIn("state['processed'] = False", load)
+        self.assertIn("frame_label.configure(image=shown, text='')", load)
+        self.assertIn("generate_button.configure(state='normal', text='Generate preview')", load)
 
     def test_enhancer_compare_and_new_media_use_selected_frame(self):
         comparison = source_for('compare_enhancer')
