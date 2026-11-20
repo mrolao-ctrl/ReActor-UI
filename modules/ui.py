@@ -996,6 +996,9 @@ def compare_enhancer() -> None:
     if (not modules.globals.source_path and not modules.globals.face_assignments) or preview_target_count() == 0:
         update_status('Select a person/source mapping and a video or frames first.')
         return
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status('VR / Stereo mode requires a mapped person from step 02.')
+        return
 
     from modules.processors.frame import face_swapper, face_enhancer
     from modules.enhancement import blend_selected_faces
@@ -1662,6 +1665,9 @@ def open_preview_frame_picker() -> None:
     if not total or not (modules.globals.source_path or modules.globals.face_assignments):
         update_status('Select a target and a source face or person assignment.')
         return
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status('VR / Stereo mode requires a mapped person from step 02.')
+        return
 
     PREVIEW.withdraw()
     picker = ctk.CTkToplevel(ROOT, fg_color=BG)
@@ -1841,6 +1847,9 @@ def show_processed_preview(index: int) -> None:
 def update_preview(frame_number: int = 0) -> bool:
     if not ((modules.globals.source_path or modules.globals.face_assignments)
             and preview_target_count()):
+        return False
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status('VR / Stereo mode requires a mapped person from step 02.')
         return False
     temp_frame = preview_target_frame(_preview_frame_index(frame_number, preview_target_count()))
     if temp_frame is None:
