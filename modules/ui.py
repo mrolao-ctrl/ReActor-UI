@@ -1707,7 +1707,7 @@ def open_preview_frame_picker() -> None:
     )
     frame_label.pack(fill='both', expand=True, padx=10, pady=10)
 
-    state = {'pending': None, 'shown': None, 'ready': False}
+    state = {'pending': None, 'shown': None, 'ready': False, 'processed': False}
     count_label = ctk.CTkLabel(
         picker, text='', text_color=TEXT,
         font=ctk.CTkFont(size=12, weight='bold')
@@ -1759,14 +1759,23 @@ def open_preview_frame_picker() -> None:
         frame_label.image = shown
         state['shown'] = index
         state['ready'] = True
-        generate_button.configure(state='normal')
+        state['processed'] = False
+        generate_button.configure(state='normal', text='Generate preview')
         feedback.configure(text='Original frame · No face swap applied yet')
 
     def schedule_frame(value) -> None:
         index = _preview_frame_index(value, total)
+        if index == state['shown'] and state['pending'] is None:
+            return
         show_position(index)
+        # Discard the previous processed image *immediately* when selecting
+        # another frame. The next image is decoded from the original video.
         state['ready'] = False
-        generate_button.configure(state='disabled')
+        state['processed'] = False
+        frame_label.configure(image=None, text='Loading original frame…')
+        frame_label.image = None
+        feedback.configure(text='Loading original frame · Preview discarded')
+        generate_button.configure(state='disabled', text='Generate preview')
         if state['pending'] is not None:
             picker.after_cancel(state['pending'])
         # Debounce seeking while the slider is dragged; model inference is
@@ -1794,11 +1803,37 @@ def open_preview_frame_picker() -> None:
         index = _preview_frame_index(picker_slider.get(), total)
         if state['shown'] != index:
             return
+
         PREVIEW_FRAME_INDEX = index
-        close_picker()
-        # Let the picker close before starting the (existing) single-frame
-        # swap/enhancement pipeline.
-        ROOT.after(10, lambda: show_processed_preview(index))
+        generate_button.configure(state='disabled')
+        feedback.configure(text='Generating preview for selected frame…')
+        picker.update_idletasks()
+        try:
+            success = update_preview(
+                index,
+                destination_label=frame_label,
+                display_bounds=(800, max(200, min(320, dialog_height - 365)))
+            )
+        except Exception as error:
+            traceback.print_exc()
+            feedback.configure(text=f'Preview failed: {error}')
+            update_status(f'Preview failed: {error}')
+            success = False
+
+        if not picker.winfo_exists():
+            return
+        if success:
+            # Keep the popup open: the processed image now occupies the
+            # original frame area; no second window is opened.
+            state['processed'] = True
+            feedback.configure(
+                text=f'Processed preview · Frame {index + 1:,} · '
+                     'Choose another frame to discard this result'
+            )
+            generate_button.configure(state='normal', text='Regenerate preview')
+        else:
+            feedback.configure(text='Preview not generated. Try another frame.')
+            generate_button.configure(state='normal', text='Generate preview')
 
     def step_frame(delta: int) -> None:
         index = _preview_frame_index(picker_slider.get() + delta, total)
@@ -1844,7 +1879,8 @@ def show_processed_preview(index: int) -> None:
         PREVIEW.focus_force()
 
 
-def update_preview(frame_number: int = 0) -> bool:
+def update_preview(frame_number: int = 0, *, destination_label=None,
+                   display_bounds=None) -> bool:
     if not ((modules.globals.source_path or modules.globals.face_assignments)
             and preview_target_count()):
         return False
@@ -1869,8 +1905,10 @@ def update_preview(frame_number: int = 0) -> bool:
     for processor in get_frame_processors_modules(modules.globals.frame_processors):
         temp_frame = processor.process_frame(source, temp_frame)
     image = Image.fromarray(cv2.cvtColor(temp_frame, cv2.COLOR_BGR2RGB))
-    image = ImageOps.contain(image, (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT), Image.LANCZOS)
+    bounds = display_bounds or (PREVIEW_MAX_WIDTH, PREVIEW_MAX_HEIGHT)
+    image = ImageOps.contain(image, bounds, Image.LANCZOS)
     displayed = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
-    preview_label.configure(image=displayed)
-    preview_label.image = displayed
+    label = destination_label if destination_label is not None else preview_label
+    label.configure(image=displayed, text='')
+    label.image = displayed
     return True
