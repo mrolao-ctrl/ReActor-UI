@@ -1644,9 +1644,21 @@ def open_preview_frame_picker() -> None:
     picker = ctk.CTkToplevel(ROOT, fg_color=BG)
     _set_app_icon(picker)
     picker.title('Choose a frame for preview')
-    picker.geometry('930x700')
+    # Leave room for both navigation and confirmation controls on shorter displays.
+    dialog_height = min(740, max(560, ROOT.winfo_screenheight() - 110))
+    picker.geometry(f'930x{dialog_height}')
     picker.minsize(650, 540)
     _bring_dialog_to_front(picker)
+
+    # Reserve the footer *before* allocating expandable image space. Otherwise
+    # Tk packs the large video preview first and pushes Generate preview below
+    # the bottom of the window (especially at Windows display scaling >100%).
+    actions = ctk.CTkFrame(
+        picker, fg_color=SURFACE, corner_radius=12,
+        border_width=1, border_color=BORDER
+    )
+    actions.pack(side='bottom', fill='x', padx=24, pady=(5, 14))
+    actions.grid_columnconfigure(1, weight=1)
 
     ctk.CTkLabel(
         picker, text='CHOOSE PREVIEW FRAME', anchor='w',
@@ -1662,7 +1674,7 @@ def open_preview_frame_picker() -> None:
     image_area.pack(fill='both', expand=True, padx=24, pady=(0, 12))
     frame_label = ctk.CTkLabel(
         image_area, text='Loading frame...', text_color=MUTED,
-        width=850, height=420
+        width=760, height=max(200, min(320, dialog_height - 365))
     )
     frame_label.pack(fill='both', expand=True, padx=10, pady=10)
 
@@ -1707,7 +1719,10 @@ def open_preview_frame_picker() -> None:
             generate_button.configure(state='disabled')
             return
         original = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        original = ImageOps.contain(original, (850, 430), Image.LANCZOS)
+        original = ImageOps.contain(
+            original, (800, max(200, min(320, dialog_height - 365))),
+            Image.LANCZOS
+        )
         shown = ctk.CTkImage(
             light_image=original, dark_image=original, size=original.size
         )
@@ -1736,10 +1751,6 @@ def open_preview_frame_picker() -> None:
         count_label.configure(text='Single image · Frame 1 / 1')
 
     feedback.pack(pady=(0, 8))
-
-    actions = ctk.CTkFrame(picker, fg_color='transparent')
-    actions.pack(fill='x', padx=24, pady=(0, 16))
-    actions.grid_columnconfigure(1, weight=1)
 
     def close_picker() -> None:
         if state['pending'] is not None:
@@ -1770,22 +1781,25 @@ def open_preview_frame_picker() -> None:
             actions, text='← Frame', width=100, height=38,
             fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
             command=lambda: step_frame(-1)
-        ).grid(row=0, column=0, padx=(0, 8))
+        ).grid(row=0, column=0, padx=(14, 0), pady=(12, 4), sticky='w')
         ctk.CTkButton(
             actions, text='Frame →', width=100, height=38,
             fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
             command=lambda: step_frame(1)
-        ).grid(row=0, column=2, padx=(8, 0))
+        ).grid(row=0, column=2, padx=(0, 14), pady=(12, 4), sticky='e')
     ctk.CTkButton(
         actions, text='Cancel', width=110, height=38,
         fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
         command=close_picker
-    ).grid(row=1, column=0, pady=(12, 0), sticky='w')
+    ).grid(row=1, column=0, padx=(14, 0), pady=(6, 12), sticky='w')
     generate_button = ctk.CTkButton(
-        actions, text='Generate preview', width=195, height=38,
-        state='disabled', command=generate_preview
+        actions, text='Generate preview', width=195, height=40,
+        fg_color=PURPLE, hover_color=PURPLE_HOVER,
+        text_color=TEXT, state='disabled', command=generate_preview
     )
-    generate_button.grid(row=1, column=2, pady=(12, 0), sticky='e')
+    generate_button.grid(
+        row=1, column=2, padx=(0, 14), pady=(6, 12), sticky='e'
+    )
     picker.protocol('WM_DELETE_WINDOW', close_picker)
     if total > 1:
         show_position(_preview_frame_index(picker_slider.get(), total))
