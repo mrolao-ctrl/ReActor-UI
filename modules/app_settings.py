@@ -18,6 +18,7 @@ DEFAULTS = {
     'keep_fps': True,
     'keep_audio': True,
     'keep_frames': False,
+    'vr_stereo_mode': False,
     'frames_fps': 30.0,
     'occlusion_protection': True,
     'occlusion_landmark_mode': 'auto',
@@ -128,7 +129,7 @@ def recommended_models_directory() -> str:
 def apply_to_globals(settings: dict, globals_module, decode_providers=None) -> None:
     """Apply saved settings to the GUI's in-memory state, no model imports."""
     s = validate(settings)
-    for key in ('keep_fps', 'keep_audio', 'keep_frames',
+    for key in ('keep_fps', 'keep_audio', 'keep_frames', 'vr_stereo_mode',
                 'frames_fps', 'max_memory', 'execution_threads', 'video_quality',
                 'video_encoder', 'occlusion_protection', 'occlusion_landmark_mode',
                 'enhancer_mode', 'enhancer_strength'):
