@@ -15,6 +15,7 @@ from modules.face_occlusion import (
 import numpy as np
 from modules.enhancement import blend_selected_faces, sharpen_frame
 from modules.frame_io import read_image, write_frame, UnreadableFrameError
+from modules.vr_stereo import stereo_eye_regions
 from modules.typing import Frame, Face
 from modules.utilities import conditional_download, resolve_relative_path, is_image, is_video
 
@@ -78,6 +79,53 @@ def target_boxes(temp_frame: Frame, frame_path=None) -> list:
     return [tuple(map(float, face.bbox))] if face is not None else []
 
 
+def process_stereo_frame(temp_frame: Frame, frame_path=None,
+                         strength: int = 40, mode: str = 'GFPGAN') -> Frame:
+    """Enhance only already-swapped faces, separately within each VR eye.
+
+    GFP-GAN and XSeg must see half-frame coordinates, while stored face boxes
+    remain in full SBS coordinates for the rest of the pipeline.
+    """
+    boxes = target_boxes(temp_frame, frame_path)
+    if not boxes:
+        return temp_frame
+    for eye, offset in stereo_eye_regions(temp_frame):
+        local_boxes = []
+        for left, top, right, bottom in boxes:
+            midpoint = (left + right) / 2
+            if offset <= midpoint < offset + eye.shape[1]:
+                local_boxes.append((
+                    left - offset, top, right - offset, bottom
+                ))
+        if not local_boxes:
+            continue
+        job_control.check_cancelled()
+        visibility = None
+        if modules.globals.occlusion_protection:
+            faces = select_faces_by_boxes(get_many_faces(eye), local_boxes)
+            if not faces:
+                warn_once(
+                    'VR enhancer could not locate mapped face safely; skipping eye'
+                )
+                continue
+            try:
+                visibility = np.ones(eye.shape[:2], dtype=np.float32)
+                for face in faces:
+                    visibility = np.minimum(
+                        visibility, get_visibility_mask(eye, face)
+                    )
+            except (RuntimeError, OSError, ValueError, cv2.error) as error:
+                warn_once(f'VR enhancer occlusion mask failed: {error}')
+                continue
+
+        candidate = enhanced_candidate(eye, mode)
+        enhanced = blend_selected_faces(eye, candidate, local_boxes, strength)
+        if visibility is not None:
+            enhanced = combine_visibility(eye, enhanced, visibility)
+        temp_frame[:, offset:offset + eye.shape[1]] = enhanced
+    return temp_frame
+
+
 def process_frame(
     source_face: Face,
     temp_frame: Frame,
@@ -91,6 +139,8 @@ def process_frame(
         mode = modules.globals.enhancer_mode
     if int(strength) <= 0:
         return temp_frame
+    if modules.globals.vr_stereo_mode:
+        return process_stereo_frame(temp_frame, frame_path, int(strength), mode)
     boxes = target_boxes(temp_frame, frame_path)
     if not boxes:
         return temp_frame
