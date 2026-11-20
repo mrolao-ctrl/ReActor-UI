@@ -26,6 +26,7 @@ ROOT_HEIGHT = 820
 ROOT_WIDTH = 1040
 
 PREVIEW = None
+PREVIEW_FRAME_INDEX = 0
 PREVIEW_MAX_HEIGHT = 700
 PREVIEW_MAX_WIDTH = 1200
 
@@ -549,7 +550,7 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     start_button.grid(row=0, column=0, padx=(24, 7), pady=(14, 5), sticky='ew')
     preview_button = ctk.CTkButton(
-        footer, text='Preview', height=44, command=toggle_preview,
+        footer, text='Preview', height=44, command=open_preview_frame_picker,
         fg_color=SECONDARY_BG,
         text_color=TEXT,
         hover_color=SECONDARY_HOVER
@@ -768,20 +769,18 @@ def open_settings() -> None:
 
 
 def create_preview(parent: ctk.CTkToplevel) -> ctk.CTkToplevel:
-    global preview_label, preview_slider
+    """Result window: frame selection happens separately, before processing."""
+    global preview_label
 
     preview = ctk.CTkToplevel(parent, fg_color=BG)
     _set_app_icon(preview)
     preview.withdraw()
-    preview.title('Preview')
-    preview.configure()
-    preview.protocol('WM_DELETE_WINDOW', lambda: toggle_preview())
+    preview.title('Processed frame preview')
+    preview.protocol('WM_DELETE_WINDOW', preview.withdraw)
     preview.resizable(width=False, height=False)
 
-    preview_label = ctk.CTkLabel(preview, text=None)
+    preview_label = ctk.CTkLabel(preview, text='')
     preview_label.pack(fill='both', expand=True)
-
-    preview_slider = ctk.CTkSlider(preview, from_=0, to=0, command=lambda frame_value: update_preview(frame_value))
 
     return preview
 
@@ -982,9 +981,7 @@ def compare_enhancer() -> None:
     from modules.processors.frame import face_swapper, face_enhancer
     from modules.enhancement import blend_selected_faces
 
-    frame_index = 0
-    if preview_target_count() > 1 and PREVIEW.state() == 'normal':
-        frame_index = max(0, int(round(preview_slider.get())))
+    frame_index = _preview_frame_index(PREVIEW_FRAME_INDEX, preview_target_count())
     frame = preview_target_frame(frame_index)
     frame_number = frame_index + 1
     if frame is None:
@@ -1249,7 +1246,7 @@ def clear_assignments() -> None:
 
 def select_frames_directory() -> None:
     """Use only local PNG files; do not require a corresponding video."""
-    global FRAMES_PREVIEW_PATHS
+    global FRAMES_PREVIEW_PATHS, PREVIEW_FRAME_INDEX
     folder = ctk.filedialog.askdirectory(
         title='Choose an existing numbered PNG frames folder',
         initialdir=RECENT_DIRECTORY_TARGET
@@ -1269,6 +1266,7 @@ def select_frames_directory() -> None:
         update_status('No readable PNG found in selected folder.')
         return
     PREVIEW.withdraw()
+    PREVIEW_FRAME_INDEX = 0
     FRAMES_PREVIEW_PATHS = [str(p) for p in paths]
     modules.globals.frames_directory = folder
     modules.globals.target_path = None
@@ -1340,7 +1338,7 @@ def select_target_path() -> None:
     In particular, a previously processed video must not leave OpenCV file
     handles or stale frame mappings attached to the next selected target.
     """
-    global RECENT_DIRECTORY_TARGET, FRAMES_PREVIEW_PATHS, img_ft, vid_ft
+    global RECENT_DIRECTORY_TARGET, FRAMES_PREVIEW_PATHS, PREVIEW_FRAME_INDEX, img_ft, vid_ft
 
     target_path = ctk.filedialog.askopenfilename(
         title='Select target video or image',
@@ -1363,6 +1361,7 @@ def select_target_path() -> None:
 
     # Only commit the new target once the preview is successfully generated.
     PREVIEW.withdraw()
+    PREVIEW_FRAME_INDEX = 0
     modules.globals.target_path = target_path
     modules.globals.output_path = None
     modules.globals.target_face_embedding = None
@@ -1614,41 +1613,207 @@ def render_video_preview(video_path: str, size: Tuple[int, int],
     return ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
 
 
-def toggle_preview() -> None:
-    if PREVIEW.state() == 'normal':
-        PREVIEW.withdraw()
-    elif (modules.globals.source_path or modules.globals.face_assignments) and preview_target_count():
-        init_preview()
-        update_preview()
-        PREVIEW.deiconify()
-    else:
+def _preview_frame_index(value: float, total: int) -> int:
+    """Clamp a frame-slider value without ever requesting a nonexistent frame."""
+    return max(0, min(max(0, int(total) - 1), int(round(value))))
+
+
+def _preview_frame_time(frame_index: int, fps: float) -> str:
+    """Human-readable video position, when an FPS value is available."""
+    if not fps or fps <= 0:
+        return ''
+    seconds = max(0, int(frame_index / fps))
+    return f'{seconds // 3600:02d}:{(seconds // 60) % 60:02d}:{seconds % 60:02d}'
+
+
+def open_preview_frame_picker() -> None:
+    """Scrub the ORIGINAL video, then process only the chosen frame on request.
+
+    No model inference is run while dragging the slider. The picker also works
+    for a selected image or an existing PNG sequence.
+    """
+    if _processing_active:
+        update_status('Finish processing before generating a preview.')
+        return
+    total = preview_target_count()
+    if not total or not (modules.globals.source_path or modules.globals.face_assignments):
         update_status('Select a target and a source face or person assignment.')
+        return
 
+    PREVIEW.withdraw()
+    picker = ctk.CTkToplevel(ROOT, fg_color=BG)
+    _set_app_icon(picker)
+    picker.title('Choose a frame for preview')
+    picker.geometry('930x700')
+    picker.minsize(650, 540)
+    _bring_dialog_to_front(picker)
 
-def init_preview() -> None:
-    count = preview_target_count()
-    if count > 1:
-        preview_slider.configure(from_=0, to=count - 1,
-                                 number_of_steps=max(1, count - 1))
-        preview_slider.pack(fill='x')
-        preview_slider.set(0)
+    ctk.CTkLabel(
+        picker, text='CHOOSE PREVIEW FRAME', anchor='w',
+        font=ctk.CTkFont(size=19, weight='bold'), text_color=TEXT
+    ).pack(fill='x', padx=24, pady=(18, 2))
+    ctk.CTkLabel(
+        picker,
+        text='Navigate through the original video, then generate a preview of the selected frame.',
+        text_color=MUTED, anchor='w', wraplength=820
+    ).pack(fill='x', padx=24, pady=(0, 10))
+
+    image_area = ctk.CTkFrame(picker, fg_color=CARD, corner_radius=14)
+    image_area.pack(fill='both', expand=True, padx=24, pady=(0, 12))
+    frame_label = ctk.CTkLabel(
+        image_area, text='Loading frame...', text_color=MUTED,
+        width=850, height=420
+    )
+    frame_label.pack(fill='both', expand=True, padx=10, pady=10)
+
+    state = {'pending': None, 'shown': None, 'ready': False}
+    count_label = ctk.CTkLabel(
+        picker, text='', text_color=TEXT,
+        font=ctk.CTkFont(size=12, weight='bold')
+    )
+    count_label.pack(pady=(0, 4))
+
+    fps = 0.0
+    if is_video(modules.globals.target_path):
+        capture = cv2.VideoCapture(modules.globals.target_path)
+        try:
+            if capture.isOpened():
+                fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+        finally:
+            capture.release()
+
+    picker_slider = ctk.CTkSlider(
+        picker, from_=0, to=max(1, total - 1),
+        number_of_steps=max(1, total - 1)
+    )
+    picker_slider.set(_preview_frame_index(PREVIEW_FRAME_INDEX, total))
+
+    feedback = ctk.CTkLabel(picker, text='', text_color=MUTED, wraplength=800)
+
+    def show_position(index: int) -> None:
+        timestamp = _preview_frame_time(index, fps)
+        stamp = f'  ·  {timestamp}' if timestamp else ''
+        count_label.configure(text=f'Frame {index + 1:,} / {total:,}{stamp}')
+
+    def load_original_frame() -> None:
+        state['pending'] = None
+        if not picker.winfo_exists():
+            return
+        index = _preview_frame_index(picker_slider.get(), total)
+        frame = preview_target_frame(index)
+        if frame is None:
+            state['ready'] = False
+            feedback.configure(text='Unable to read this frame. Try another position.')
+            generate_button.configure(state='disabled')
+            return
+        original = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        original = ImageOps.contain(original, (850, 430), Image.LANCZOS)
+        shown = ctk.CTkImage(
+            light_image=original, dark_image=original, size=original.size
+        )
+        frame_label.configure(image=shown, text='')
+        frame_label.image = shown
+        state['shown'] = index
+        state['ready'] = True
+        generate_button.configure(state='normal')
+        feedback.configure(text='Original frame · No face swap applied yet')
+
+    def schedule_frame(value) -> None:
+        index = _preview_frame_index(value, total)
+        show_position(index)
+        state['ready'] = False
+        generate_button.configure(state='disabled')
+        if state['pending'] is not None:
+            picker.after_cancel(state['pending'])
+        # Debounce seeking while the slider is dragged; model inference is
+        # reserved for Generate preview, never for navigation.
+        state['pending'] = picker.after(120, load_original_frame)
+
+    picker_slider.configure(command=schedule_frame)
+    if total > 1:
+        picker_slider.pack(fill='x', padx=32, pady=(2, 6))
     else:
-        preview_slider.pack_forget()
+        count_label.configure(text='Single image · Frame 1 / 1')
+
+    feedback.pack(pady=(0, 8))
+
+    actions = ctk.CTkFrame(picker, fg_color='transparent')
+    actions.pack(fill='x', padx=24, pady=(0, 16))
+    actions.grid_columnconfigure(1, weight=1)
+
+    def close_picker() -> None:
+        if state['pending'] is not None:
+            picker.after_cancel(state['pending'])
+            state['pending'] = None
+        picker.destroy()
+
+    def generate_preview() -> None:
+        global PREVIEW_FRAME_INDEX
+        if not state['ready'] or _processing_active:
+            return
+        index = _preview_frame_index(picker_slider.get(), total)
+        if state['shown'] != index:
+            return
+        PREVIEW_FRAME_INDEX = index
+        close_picker()
+        # Let the picker close before starting the (existing) single-frame
+        # swap/enhancement pipeline.
+        ROOT.after(10, lambda: show_processed_preview(index))
+
+    def step_frame(delta: int) -> None:
+        index = _preview_frame_index(picker_slider.get() + delta, total)
+        picker_slider.set(index)
+        schedule_frame(index)
+
+    if total > 1:
+        ctk.CTkButton(
+            actions, text='← Frame', width=100, height=38,
+            fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+            command=lambda: step_frame(-1)
+        ).grid(row=0, column=0, padx=(0, 8))
+        ctk.CTkButton(
+            actions, text='Frame →', width=100, height=38,
+            fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+            command=lambda: step_frame(1)
+        ).grid(row=0, column=2, padx=(8, 0))
+    ctk.CTkButton(
+        actions, text='Cancel', width=110, height=38,
+        fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+        command=close_picker
+    ).grid(row=1, column=0, pady=(12, 0), sticky='w')
+    generate_button = ctk.CTkButton(
+        actions, text='Generate preview', width=195, height=38,
+        state='disabled', command=generate_preview
+    )
+    generate_button.grid(row=1, column=2, pady=(12, 0), sticky='e')
+    picker.protocol('WM_DELETE_WINDOW', close_picker)
+    if total > 1:
+        show_position(_preview_frame_index(picker_slider.get(), total))
+    load_original_frame()
 
 
-def update_preview(frame_number: int = 0) -> None:
+def show_processed_preview(index: int) -> None:
+    """Keep the old processed-result window; show only the selected frame."""
+    if update_preview(index):
+        PREVIEW.title(f'Processed preview · Frame {index + 1}')
+        PREVIEW.deiconify()
+        PREVIEW.lift()
+        PREVIEW.focus_force()
+
+
+def update_preview(frame_number: int = 0) -> bool:
     if not ((modules.globals.source_path or modules.globals.face_assignments)
             and preview_target_count()):
-        return
-    temp_frame = preview_target_frame(max(0, int(round(frame_number))))
+        return False
+    temp_frame = preview_target_frame(_preview_frame_index(frame_number, preview_target_count()))
     if temp_frame is None:
         update_status('Cannot read selected preview frame.')
-        return
+        return False
     if modules.globals.nsfw is False:
         from modules.predicter import predict_frame
         if predict_frame(temp_frame):
             update_status('Preview is not available for this frame.')
-            return
+            return False
     from modules.processors.frame import face_swapper
     source = (
         face_swapper.prepare_multi_assignments()
@@ -1662,3 +1827,4 @@ def update_preview(frame_number: int = 0) -> None:
     displayed = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
     preview_label.configure(image=displayed)
     preview_label.image = displayed
+    return True

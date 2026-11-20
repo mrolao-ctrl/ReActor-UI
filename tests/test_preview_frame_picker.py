@@ -1,0 +1,108 @@
+"""Headless regressions for the Preview frame selection workflow.
+
+The frame picker displays unmodified source frames while scrubbing, then
+runs the existing single-frame face-swap preview only on confirmation.
+"""
+import ast
+from pathlib import Path
+import unittest
+from unittest.mock import Mock
+
+
+UI_PATH = Path(__file__).resolve().parents[1] / 'modules' / 'ui.py'
+SOURCE = UI_PATH.read_text(encoding='utf-8')
+TREE = ast.parse(SOURCE)
+
+
+def source_for(name):
+    node = next(n for n in TREE.body
+                if isinstance(n, ast.FunctionDef) and n.name == name)
+    return ast.get_source_segment(SOURCE, node)
+
+
+def load_helper(name):
+    node = next(n for n in TREE.body
+                if isinstance(n, ast.FunctionDef) and n.name == name)
+    namespace = {}
+    program = ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]))
+    exec(compile(program, str(UI_PATH), 'exec'), namespace)
+    return namespace[name]
+
+
+class PreviewFrameSelectionTests(unittest.TestCase):
+    def test_clamps_fractional_frame_and_outside_range(self):
+        index = load_helper('_preview_frame_index')
+        self.assertEqual(0, index(-200, 1319))
+        self.assertEqual(0, index(0.2, 1319))
+        self.assertEqual(1, index(0.8, 1319))
+        self.assertEqual(1318, index(1319, 1319))
+        self.assertEqual(0, index(200, 0))
+        self.assertEqual(0, index(400, 1))
+
+    def test_frame_time_is_based_on_fps_and_has_no_zero_division(self):
+        format_time = load_helper('_preview_frame_time')
+        self.assertEqual('00:00:00', format_time(0, 25))
+        self.assertEqual('00:01:05', format_time(1625, 25))
+        self.assertEqual('01:00:00', format_time(108000, 30))
+        self.assertEqual('', format_time(200, 0))
+
+    def test_main_preview_button_opens_frame_picker(self):
+        root = source_for('create_root')
+        self.assertIn("text='Preview', height=44, command=open_preview_frame_picker", root)
+
+    def test_original_frames_are_not_processed_while_scrubbing(self):
+        picker = source_for('open_preview_frame_picker')
+        # A frame is decoded, scaled for display and selected before inference.
+        self.assertIn('ctk.CTkToplevel(ROOT, fg_color=BG)', picker)
+        self.assertIn('_bring_dialog_to_front(picker)', picker)
+        self.assertIn('preview_target_frame(index)', picker)
+        self.assertIn('ImageOps.contain(original, (850, 430)', picker)
+        self.assertIn('ctk.CTkSlider(', picker)
+        self.assertIn('number_of_steps=max(1, total - 1)', picker)
+        self.assertIn('picker.after(120, load_original_frame)', picker)
+        self.assertIn('picker.after_cancel(state[\'pending\'])', picker)
+        self.assertIn("text='Generate preview'", picker)
+        self.assertIn("text='Cancel'", picker)
+        self.assertIn('PREVIEW_FRAME_INDEX = index', picker)
+        self.assertIn('show_processed_preview(index)', picker)
+        self.assertNotIn('face_swapper.process_frame(', picker)
+        self.assertNotIn('update_preview(index)', picker)
+
+    def test_processed_result_reuses_old_face_swap_pipeline(self):
+        processed = source_for('show_processed_preview')
+        render = source_for('update_preview')
+        result_window = source_for('create_preview')
+        self.assertIn('if update_preview(index):', processed)
+        self.assertIn('PREVIEW.deiconify()', processed)
+        self.assertIn('face_swapper.prepare_multi_assignments()', render)
+        self.assertIn('processor.process_frame(source, temp_frame)', render)
+        self.assertIn('preview_label.configure(image=displayed)', render)
+        self.assertIn("preview.protocol('WM_DELETE_WINDOW', preview.withdraw)", result_window)
+        self.assertNotIn('CTkSlider', result_window)
+
+    def test_enhancer_compare_and_new_media_use_selected_frame(self):
+        comparison = source_for('compare_enhancer')
+        self.assertIn('_preview_frame_index(PREVIEW_FRAME_INDEX', comparison)
+        self.assertIn('PREVIEW_FRAME_INDEX = 0', source_for('select_target_path'))
+        self.assertIn('PREVIEW_FRAME_INDEX = 0', source_for('select_frames_directory'))
+
+    def test_processed_window_only_shows_after_successful_preview(self):
+        fn = load_helper('show_processed_preview')
+        class FakeWindow:
+            def __init__(self):
+                self.title = Mock()
+                self.deiconify = Mock()
+                self.lift = Mock()
+                self.focus_force = Mock()
+        window = FakeWindow()
+        fn.__globals__.update(PREVIEW=window, update_preview=Mock(return_value=False))
+        fn(35)
+        window.deiconify.assert_not_called()
+        fn.__globals__['update_preview'] = Mock(return_value=True)
+        fn(35)
+        window.deiconify.assert_called_once()
+        window.title.assert_called_once_with('Processed preview · Frame 36')
+
+
+if __name__ == '__main__':
+    unittest.main()
