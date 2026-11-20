@@ -56,7 +56,8 @@ class PreviewFrameSelectionTests(unittest.TestCase):
         self.assertIn('ctk.CTkToplevel(ROOT, fg_color=BG)', picker)
         self.assertIn('_bring_dialog_to_front(picker)', picker)
         self.assertIn('preview_target_frame(index)', picker)
-        self.assertIn('ImageOps.contain(original, (850, 430)', picker)
+        self.assertIn('ImageOps.contain(', picker)
+        self.assertIn('min(320, dialog_height - 365)', picker)
         self.assertIn('ctk.CTkSlider(', picker)
         self.assertIn('number_of_steps=max(1, total - 1)', picker)
         self.assertIn('picker.after(120, load_original_frame)', picker)
@@ -67,6 +68,35 @@ class PreviewFrameSelectionTests(unittest.TestCase):
         self.assertIn('show_processed_preview(index)', picker)
         self.assertNotIn('face_swapper.process_frame(', picker)
         self.assertNotIn('update_preview(index)', picker)
+
+    def test_popup_reserves_visible_footer_before_expandable_media(self):
+        picker = source_for('open_preview_frame_picker')
+        footer_position = picker.index("actions.pack(side='bottom', fill='x'")
+        media_position = picker.index("image_area.pack(fill='both', expand=True")
+        self.assertLess(footer_position, media_position)
+        self.assertIn("ROOT.winfo_screenheight() - 110", picker)
+        self.assertIn("picker.minsize(650, 540)", picker)
+        self.assertIn("width=760, height=max(200, min(320, dialog_height - 365))", picker)
+        # Equal left and right insets for each row, to align Frame +/-
+        # with Cancel / Generate preview inside the bordered footer.
+        self.assertIn(
+            ".grid(row=0, column=0, padx=(14, 0), pady=(12, 4), sticky='w')",
+            picker
+        )
+        self.assertIn(
+            ".grid(row=0, column=2, padx=(0, 14), pady=(12, 4), sticky='e')",
+            picker
+        )
+        self.assertIn(
+            ".grid(row=1, column=0, padx=(14, 0), pady=(6, 12), sticky='w')",
+            picker
+        )
+        self.assertIn(
+            "row=1, column=2, padx=(0, 14), pady=(6, 12), sticky='e'",
+            picker
+        )
+        self.assertIn("text='Generate preview'", picker)
+        self.assertIn('fg_color=PURPLE, hover_color=PURPLE_HOVER', picker)
 
     def test_processed_result_reuses_old_face_swap_pipeline(self):
         processed = source_for('show_processed_preview')
