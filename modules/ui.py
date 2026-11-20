@@ -423,6 +423,23 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     frames_fps_entry.insert(0, str(modules.globals.frames_fps))
     frames_fps_entry.pack(side='left')
 
+    vr_stereo_value = ctk.BooleanVar(value=bool(modules.globals.vr_stereo_mode))
+    ctk.CTkSwitch(
+        processing, text='VR / Stereo mode (side-by-side)',
+        variable=vr_stereo_value,
+        command=lambda: setattr(
+            modules.globals, 'vr_stereo_mode', bool(vr_stereo_value.get())
+        )
+    ).grid(row=5, column=0, columnspan=2,
+           padx=22, pady=(2, 5), sticky='w')
+    ctk.CTkLabel(
+        processing,
+        text='For left/right eye videos. Map each person once; reuse the '
+             'same reference on both views. Leave off for normal videos.',
+        anchor='w', justify='left', wraplength=810, text_color=MUTED
+    ).grid(row=6, column=0, columnspan=2,
+           padx=22, pady=(0, 17), sticky='ew')
+
     occlusion = _section(
         content, '04   OCCLUSION PROTECTION',
         'Keep foreground objects, such as microphones and hands, in front of swapped faces.'
@@ -619,6 +636,7 @@ def open_settings() -> None:
         'keep_fps': bool(modules.globals.keep_fps),
         'keep_audio': bool(modules.globals.keep_audio),
         'keep_frames': bool(modules.globals.keep_frames),
+        'vr_stereo_mode': bool(modules.globals.vr_stereo_mode),
         'occlusion_protection': bool(modules.globals.occlusion_protection),
         'occlusion_landmark_mode': modules.globals.occlusion_landmark_mode,
         'enhancer_enabled': bool(modules.globals.fp_ui.get('face_enhancer', False)),
@@ -712,7 +730,7 @@ def open_settings() -> None:
         wraplength=560, justify='left', text_color=MUTED
     ).grid(row=8, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
     ctk.CTkLabel(
-        content, text='All current Keep FPS/Audio/Frames, XSeg and Enhancer '
+        content, text='Current Keep FPS/Audio/Frames, VR/Stereo, XSeg and Enhancer '
                       'switches on the main screen are also saved as defaults.',
         wraplength=560, justify='left', text_color=MUTED
     ).grid(row=9, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
@@ -748,6 +766,7 @@ def open_settings() -> None:
         modules.globals.execution_threads = checked['execution_threads']
         modules.globals.video_quality = checked['video_quality']
         modules.globals.video_encoder = checked['video_encoder']
+        modules.globals.vr_stereo_mode = checked['vr_stereo_mode']
         modules.globals.models_directory = checked['models_directory']
         modules.globals.frames_fps = checked['frames_fps']
         frames_fps_entry.delete(0, 'end')
@@ -976,6 +995,9 @@ def compare_enhancer() -> None:
     """
     if (not modules.globals.source_path and not modules.globals.face_assignments) or preview_target_count() == 0:
         update_status('Select a person/source mapping and a video or frames first.')
+        return
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status('VR / Stereo mode requires a mapped person from step 02.')
         return
 
     from modules.processors.frame import face_swapper, face_enhancer
@@ -1439,7 +1461,11 @@ def open_face_picker(multiple: bool = False) -> None:
             feedback.configure(text='Could not read this frame. Try another one.')
             return
 
-        faces = get_many_faces(frame) or []
+        if modules.globals.vr_stereo_mode:
+            from modules.vr_stereo import picker_stereo_faces
+            faces = picker_stereo_faces(frame, get_many_faces)
+        else:
+            faces = get_many_faces(frame) or []
         image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         image = ImageOps.contain(image, (850, 510), Image.LANCZOS)
         scale_x = image.width / frame.shape[1]
@@ -1639,6 +1665,9 @@ def open_preview_frame_picker() -> None:
     if not total or not (modules.globals.source_path or modules.globals.face_assignments):
         update_status('Select a target and a source face or person assignment.')
         return
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status('VR / Stereo mode requires a mapped person from step 02.')
+        return
 
     PREVIEW.withdraw()
     picker = ctk.CTkToplevel(ROOT, fg_color=BG)
@@ -1818,6 +1847,9 @@ def show_processed_preview(index: int) -> None:
 def update_preview(frame_number: int = 0) -> bool:
     if not ((modules.globals.source_path or modules.globals.face_assignments)
             and preview_target_count()):
+        return False
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status('VR / Stereo mode requires a mapped person from step 02.')
         return False
     temp_frame = preview_target_frame(_preview_frame_index(frame_number, preview_target_count()))
     if temp_frame is None:

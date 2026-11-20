@@ -11,6 +11,7 @@ from modules.core import update_status
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import select_matching_face
 from modules.multi_face import prepare_assignments, swap_assigned_faces
+from modules.vr_stereo import swap_stereo_assigned_faces
 from modules.face_occlusion import (
     combine_visibility, get_visibility_mask, get_occluder_session, warn_once
 )
@@ -30,6 +31,12 @@ def pre_check() -> bool:
 
 
 def pre_start() -> bool:
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status(
+            'VR / Stereo mode requires at least one mapped person. '
+            'Map a target face and source photo in step 02.', NAME
+        )
+        return False
     if modules.globals.occlusion_protection:
         try:
             get_occluder_session()
@@ -117,9 +124,16 @@ def process_frame(source_face: Face, temp_frame: Frame, frame_path=None,
         # Single frame preview fallback. Video loops prepare this just once.
         prepared_assignments = prepare_multi_assignments()
     if prepared_assignments is not None:
-        temp_frame, boxes = swap_assigned_faces(
-            temp_frame, prepared_assignments, get_many_faces, swap_face
-        )
+        if modules.globals.vr_stereo_mode:
+            temp_frame, boxes = swap_stereo_assigned_faces(
+                temp_frame, prepared_assignments, get_many_faces,
+                swap_face, check_cancelled=job_control.check_cancelled
+            )
+        else:
+            # Non-VR path and conservative 1:1 matching stay unchanged.
+            temp_frame, boxes = swap_assigned_faces(
+                temp_frame, prepared_assignments, get_many_faces, swap_face
+            )
         if frame_path is None:
             modules.globals.preview_face_boxes = boxes
         else:
