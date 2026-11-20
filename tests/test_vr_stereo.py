@@ -132,6 +132,77 @@ class StereoModeTests(unittest.TestCase):
         self.assertEqual([122, 10, 142, 30], list(faces[1].bbox))
         self.assertEqual([22, 10, 42, 30], list(right.bbox))
 
+    def test_enhancer_uses_eye_local_boxes_and_keeps_sbs_layout(self):
+        enhancer_path = (Path(__file__).resolve().parents[1] /
+                         'modules' / 'processors' / 'frame' / 'face_enhancer.py')
+        program = ast.parse(enhancer_path.read_text(encoding='utf-8'))
+        node = next(n for n in program.body
+                    if isinstance(n, ast.FunctionDef) and n.name == 'process_stereo_frame')
+        seen_boxes = []
+
+        def blend(eye, candidate, local_boxes, strength):
+            seen_boxes.append((list(local_boxes), strength, eye.shape))
+            copy = eye.copy()
+            for x1, y1, x2, y2 in local_boxes:
+                copy[int(y1):int(y2), int(x1):int(x2)] = 90
+            return copy
+
+        context = {
+            'Frame': np.ndarray, 'target_boxes': lambda frame, path: [
+                (10, 5, 20, 15), (110, 5, 120, 15)
+            ],
+            'stereo_eye_regions': vr_stereo.stereo_eye_regions,
+            'job_control': SimpleNamespace(check_cancelled=lambda: None),
+            'modules': SimpleNamespace(
+                globals=SimpleNamespace(occlusion_protection=False)
+            ),
+            'enhanced_candidate': lambda eye, mode: eye + 1,
+            'blend_selected_faces': blend,
+        }
+        module = ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]))
+        exec(compile(module, str(enhancer_path), 'exec'), context)
+        input_frame = np.zeros((40, 200, 3), dtype=np.uint8)
+        result = context['process_stereo_frame'](input_frame, strength=35)
+        self.assertEqual(2, len(seen_boxes))
+        self.assertEqual(
+            [([(10, 5, 20, 15)], 35, (40, 100, 3)),
+             ([(10, 5, 20, 15)], 35, (40, 100, 3))],
+            seen_boxes
+        )
+        self.assertTrue(np.all(result[5:15, 10:20] == 90))
+        self.assertTrue(np.all(result[5:15, 110:120] == 90))
+        self.assertEqual(0, int(result[25, 40, 0]))
+
+    def test_vr_mode_changes_png_resume_fingerprint_only_when_enabled(self):
+        import tempfile
+        import modules.globals
+        from modules.frames_workflow import job_fingerprint
+        original = modules.globals.vr_stereo_mode
+        try:
+            with tempfile.TemporaryDirectory() as root:
+                folder = Path(root)
+                photo = folder / 'source.png'
+                photo.write_bytes(b'just a filename for this hashing test')
+                references = [{
+                    'embedding': [1., 0.], 'source_path': str(photo)
+                }]
+                modules.globals.vr_stereo_mode = False
+                base = job_fingerprint(
+                    root, str(folder / 'output.mp4'), references, 30, False, 1
+                )
+                modules.globals.vr_stereo_mode = True
+                stereo = job_fingerprint(
+                    root, str(folder / 'output.mp4'), references, 30, False, 1
+                )
+                modules.globals.vr_stereo_mode = False
+                again = job_fingerprint(
+                    root, str(folder / 'output.mp4'), references, 30, False, 1
+                )
+                self.assertNotEqual(base, stereo)
+                self.assertEqual(base, again)
+        finally:
+            modules.globals.vr_stereo_mode = original
+
     def test_settings_default_off_and_survive_round_trip(self):
         import tempfile
         self.assertFalse(DEFAULTS['vr_stereo_mode'])
