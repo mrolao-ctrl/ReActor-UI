@@ -157,7 +157,8 @@ class StereoModeTests(unittest.TestCase):
         self.assertIn('swap_assigned_faces(', swapper)
         self.assertIn('if modules.globals.vr_stereo_mode:', enhancer)
         self.assertIn('return process_stereo_frame(', enhancer)
-        self.assertIn("'vr_stereo_mode': bool(modules.globals.vr_stereo_mode)", png_workflow)
+        self.assertIn("if modules.globals.vr_stereo_mode:", png_workflow)
+        self.assertIn("record['vr_stereo_mode'] = True", png_workflow)
         self.assertIn('face_swapper.prepare_multi_assignments()', ui)
         for text in (ui, swapper, enhancer, png_workflow):
             ast.parse(text)
