@@ -17,6 +17,8 @@ keep_fps = None
 keep_audio = None
 keep_frames = None
 many_faces = None
+# Opt-in side-by-side VR: each half represents one eye of the same scene.
+vr_stereo_mode = False
 # Unit-length reference embedding for the target person selected in the UI.
 # None means the original leftmost-face selection remains in effect.
 target_face_embedding = None
