@@ -31,6 +31,12 @@ def pre_check() -> bool:
 
 
 def pre_start() -> bool:
+    if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
+        update_status(
+            'VR / Stereo mode requires at least one mapped person. '
+            'Map a target face and source photo in step 02.', NAME
+        )
+        return False
     if modules.globals.occlusion_protection:
         try:
             get_occluder_session()
