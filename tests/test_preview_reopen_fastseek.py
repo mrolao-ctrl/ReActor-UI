@@ -37,7 +37,11 @@ class Capture:
         return True
 
     def get(self, key):
-        return 30.0 if key == cv2.CAP_PROP_FPS else 0
+        if key == cv2.CAP_PROP_FPS:
+            return 30.0
+        if key == cv2.CAP_PROP_FRAME_COUNT:
+            return 20000
+        return 0
 
     def set(self, key, value):
         self.position = int(value)
@@ -70,6 +74,10 @@ class PreviewReopenTests(unittest.TestCase):
             self.assertEqual(first_gen, original[0])
             self.assertIsNone(original[-1])
             self.assertEqual(1, len(Capture.instances))
+            self.assertEqual(
+                (20000, 30.0),
+                preview_reader.shared_video_preview_metadata('same.mp4')
+            )
 
             # The popup closes, but the session keeps the video decoder alive.
             reader.invalidate()
@@ -168,6 +176,12 @@ class PreviewReopenTests(unittest.TestCase):
         self.assertIn('shared_video_preview_reader(video_path, max_size=preview_size)', source)
         self.assertIn('frame_reader.invalidate()', source)
         self.assertIn('clear_shared_video_preview_reader()', source)
+        self.assertIn('shared_video_preview_metadata(', source)
+        self.assertIn('metadata = shared_video_preview_metadata(video_path)', source)
+        self.assertNotIn('capture = cv2.VideoCapture(modules.globals.target_path)', source[
+            source.index('def open_preview_frame_picker'):
+            source.index('def show_processed_preview')
+        ])
         self.assertIn("if video_path:", source)
 
 
