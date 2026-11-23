@@ -38,6 +38,13 @@ class FakeCapture:
     def isOpened(self):
         return True
 
+    def get(self, key):
+        if key == cv2.CAP_PROP_FPS:
+            return 30.0
+        if key == cv2.CAP_PROP_FRAME_COUNT:
+            return 10000
+        raise AssertionError(f'Unexpected property {key}')
+
     def set(self, key, value):
         if key != cv2.CAP_PROP_POS_FRAMES:
             raise AssertionError('Unexpected property')
@@ -61,7 +68,8 @@ class AsyncPreviewReaderTests(unittest.TestCase):
 
     def test_one_capture_is_reused_for_seeks_and_sequential_frames(self):
         with patch('modules.preview_reader.cv2.VideoCapture', FakeCapture):
-            reader = FramePreviewReader(video_path='demo.mp4', max_size=(80, 40))
+            reader = FramePreviewReader(video_path='demo.mp4', max_size=(80, 40),
+                                        prefer_fast_seek=False)
             try:
                 for index in (2, 3, 12):
                     reader.request(index)
@@ -92,7 +100,7 @@ class AsyncPreviewReaderTests(unittest.TestCase):
                 return super().read()
 
         with patch('modules.preview_reader.cv2.VideoCapture', SlowCapture):
-            reader = FramePreviewReader(video_path='demo.mp4')
+            reader = FramePreviewReader(video_path='demo.mp4', prefer_fast_seek=False)
             try:
                 reader.request(5)
                 self.assertTrue(reading.wait(timeout=2))
@@ -118,7 +126,7 @@ class AsyncPreviewReaderTests(unittest.TestCase):
                 return super().read()
 
         with patch('modules.preview_reader.cv2.VideoCapture', BlockedCapture):
-            reader = FramePreviewReader(video_path='demo.mp4')
+            reader = FramePreviewReader(video_path='demo.mp4', prefer_fast_seek=False)
             reader.request(7)
             self.assertTrue(reading.wait(timeout=2))
             try:

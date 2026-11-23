@@ -151,6 +151,7 @@ class VideoSelectionRegressionTests(unittest.TestCase):
             'MEDIA_THUMBNAIL_SIZE': (280, 160),
             'render_video_preview': Mock(return_value=thumbnail),
             'render_image_preview': Mock(),
+            'clear_shared_video_preview_reader': Mock(),
             'update_assignments_label': Mock(), 'update_status': Mock()
         }
         select = extract_function('select_target_path', context)
@@ -164,6 +165,7 @@ class VideoSelectionRegressionTests(unittest.TestCase):
         self.assertEqual([], state.preview_face_boxes)
         self.assertEqual([], context['FRAMES_PREVIEW_PATHS'])
         preview.withdraw.assert_called_once()
+        context['clear_shared_video_preview_reader'].assert_called_once()
         label.configure.assert_called_once_with(image=thumbnail, text='')
         self.assertIs(label.image, thumbnail)
 
