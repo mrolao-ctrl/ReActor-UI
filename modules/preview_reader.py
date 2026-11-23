@@ -31,6 +31,7 @@ class FramePreviewReader:
         self._results = queue.Queue(maxsize=1)
         self._cache = None
         self._active_ffmpeg = None
+        self._video_metadata = None
         self._thread = threading.Thread(
             target=self._run, name='ReActorPreviewFrames', daemon=True
         )
@@ -59,6 +60,11 @@ class FramePreviewReader:
                 self._results.put_nowait(result)
             except queue.Full:
                 pass
+
+    def video_metadata(self):
+        """Cached (frame count, FPS), available after the first video read."""
+        with self._lock:
+            return self._video_metadata
 
     def request(self, index):
         """Request the most recent position, cancelling obsolete FFmpeg seeks."""
@@ -174,6 +180,9 @@ class FramePreviewReader:
                                 if not capture.isOpened():
                                     raise RuntimeError('Could not open the selected video.')
                                 fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+                                frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                                with self._lock:
+                                    self._video_metadata = (frame_count, fps)
                             # OpenCV can decode thousands of intervening frames
                             # on large GOP/VR videos. Use FFmpeg's input-side
                             # keyframe seek instead for large jumps. Retain the
@@ -279,6 +288,18 @@ def shared_video_preview_reader(video_path, max_size=(800, 320)):
         )
         _shared_key = key
         return _shared_reader
+
+
+def shared_video_preview_metadata(video_path):
+    """Peek at the current video's metadata without reopening it on the Tk thread."""
+    with _shared_lock:
+        reader = _shared_reader
+        key = _shared_key
+    if reader is None or key is None:
+        return None
+    if key[:3] != _video_key(video_path, reader.max_size)[:3]:
+        return None
+    return reader.video_metadata()
 
 
 def clear_shared_video_preview_reader():
