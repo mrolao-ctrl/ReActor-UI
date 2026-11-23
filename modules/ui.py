@@ -73,7 +73,7 @@ SECONDARY_HOVER = '#2E3D62'
 img_ft, vid_ft = modules.globals.file_types
 
 # Keep the Media Library preview compact enough to fit the first workflow page.
-MEDIA_THUMBNAIL_SIZE = (160, 160)
+MEDIA_THUMBNAIL_SIZE = (280, 160)
 
 WORKFLOW_TITLES = (
     '01   SELECT MEDIA',
@@ -318,8 +318,9 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     )
     target_card.grid(row=2, column=0, columnspan=2,
                      padx=20, pady=(0, 14), sticky='ew')
-    target_card.grid_columnconfigure(0, weight=2)
-    target_card.grid_columnconfigure(1, weight=3)
+    # Text-sized action column on the left, flexible media preview on the right.
+    target_card.grid_columnconfigure(0, weight=0)
+    target_card.grid_columnconfigure(1, weight=1)
     ctk.CTkLabel(
         target_card, text='TARGET MEDIA', anchor='w',
         font=ctk.CTkFont(size=12, weight='bold'),
@@ -327,28 +328,34 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     ).grid(row=0, column=0, columnspan=2,
            padx=15, pady=(10, 4), sticky='ew')
 
-    # The thumbnail and both media actions share one compact row, rather
-    # than stacking tall previews and buttons below the visible page.
-    target_label = ctk.CTkLabel(
-        target_card, text='No target selected', height=164, wraplength=260
-    )
-    target_label.grid(row=1, column=0, padx=(15, 8),
-                      pady=(0, 12), sticky='nsew')
-
+    # Buttons stay on the LEFT, individually sized to their text; the RIGHT
+    # column uses the remaining width for a larger target-media thumbnail.
     target_actions = ctk.CTkFrame(target_card, fg_color='transparent')
-    target_actions.grid(row=1, column=1, padx=(8, 16),
-                        pady=(0, 12), sticky='nsew')
+    target_actions.grid(row=1, column=0, padx=(15, 8),
+                        pady=(0, 12), sticky='w')
+
+    media_button_font = ctk.CTkFont(size=14)
     ctk.CTkButton(
         target_actions, text='Select target video / image',
-        command=select_target_path, height=40
-    ).pack(fill='x', pady=(24, 10))
+        command=select_target_path, height=40,
+        font=media_button_font,
+        width=media_button_font.measure('Select target video / image') + 36
+    ).pack(anchor='w', pady=(24, 10))
     ctk.CTkButton(
         target_actions, text='Use existing PNG frames',
         command=select_frames_directory, height=40,
+        font=media_button_font,
+        width=media_button_font.measure('Use existing PNG frames') + 36,
         fg_color=SECONDARY_BG,
         text_color=TEXT,
         hover_color=SECONDARY_HOVER
-    ).pack(fill='x')
+    ).pack(anchor='w')
+
+    target_label = ctk.CTkLabel(
+        target_card, text='No target selected', height=164, wraplength=500
+    )
+    target_label.grid(row=1, column=1, padx=(8, 16),
+                      pady=(0, 12), sticky='nsew')
 
     people = _section(
         content, '02   PEOPLE & SOURCE PHOTOS',
