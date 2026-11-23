@@ -117,7 +117,8 @@ class FiveStageNavigationTests(unittest.TestCase):
         self.assertIn('source_card = ctk.CTkFrame(\n        people,', segment)
         self.assertNotIn('source_card = ctk.CTkFrame(\n        media,', segment)
         self.assertIn('target_card.grid(row=2, column=0, columnspan=2,', segment)
-        self.assertIn('target_actions.grid(row=1, column=1', segment)
+        self.assertIn('target_label.grid(row=1, column=1', segment)
+        self.assertIn('target_actions.grid(row=1, column=0', segment)
 
     def test_media_dialog_defaults_to_video_and_retains_images(self):
         function = next(
