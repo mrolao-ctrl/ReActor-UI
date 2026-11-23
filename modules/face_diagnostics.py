@@ -46,8 +46,12 @@ def _reason(scores, selected, assignment_index, face_index, all_scores,
         val for i, val in enumerate(scores)
         if i != assignment_index and val is not None
     ]
-    if competitors and score - max(competitors) < MIN_MARGIN:
-        return 'Ambiguous identity — competing mapped person'
+    if competitors:
+        best_other = max(competitors)
+        if best_other >= score + MIN_MARGIN:
+            return 'Another mapped person has a stronger similarity score'
+        if score - best_other < MIN_MARGIN:
+            return 'Ambiguous identity — competing mapped person'
     if not is_stereo:
         other_faces = [
             row[assignment_index] for i, row in enumerate(all_scores)
