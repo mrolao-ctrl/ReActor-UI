@@ -18,6 +18,7 @@ from modules.app_settings import load_settings, save_settings, validate, recomme
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import normalized_embedding
 from modules.capturer import get_video_frame, get_video_frame_total
+from modules.preview_reader import FramePreviewReader
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
 
@@ -1707,7 +1708,16 @@ def open_preview_frame_picker() -> None:
     )
     frame_label.pack(fill='both', expand=True, padx=10, pady=10)
 
-    state = {'pending': None, 'shown': None, 'ready': False, 'processed': False}
+    state = {
+        'pending': None, 'poll': None, 'requested': None, 'frame': None,
+        'shown': None, 'ready': False, 'processed': False
+    }
+    frame_reader = FramePreviewReader(
+        video_path=modules.globals.target_path if is_video(modules.globals.target_path) else None,
+        frame_paths=FRAMES_PREVIEW_PATHS if modules.globals.frames_directory else None,
+        image_path=modules.globals.target_path if is_image(modules.globals.target_path) else None,
+        max_size=(800, max(200, min(320, dialog_height - 365)))
+    )
     count_label = ctk.CTkLabel(
         picker, text='', text_color=TEXT,
         font=ctk.CTkFont(size=12, weight='bold')
@@ -1736,51 +1746,67 @@ def open_preview_frame_picker() -> None:
         stamp = f'  ·  {timestamp}' if timestamp else ''
         count_label.configure(text=f'Frame {index + 1:,} / {total:,}{stamp}')
 
+    def show_original_result() -> None:
+        """Poll the reader on Tk's thread; ignore stale responses."""
+        if not picker.winfo_exists():
+            return
+        result = frame_reader.latest()
+        if result is not None:
+            generation, index, original, thumbnail, error = result
+            current_index = _preview_frame_index(picker_slider.get(), total)
+            if generation == state['requested'] and index == current_index:
+                if error or original is None or thumbnail is None:
+                    state['ready'] = False
+                    state['frame'] = None
+                    feedback.configure(
+                        text=f'Unable to read this frame: {error or "unknown error"}. '
+                             'Try another position.'
+                    )
+                    generate_button.configure(state='disabled')
+                else:
+                    image = Image.fromarray(thumbnail)
+                    shown = ctk.CTkImage(
+                        light_image=image, dark_image=image, size=image.size
+                    )
+                    frame_label.configure(image=shown, text='')
+                    frame_label.image = shown
+                    state['frame'] = original
+                    state['shown'] = index
+                    state['ready'] = True
+                    state['processed'] = False
+                    generate_button.configure(state='normal', text='Generate preview')
+                    feedback.configure(text='Original frame · No face swap applied yet')
+        state['poll'] = picker.after(60, show_original_result)
+
     def load_original_frame() -> None:
+        """Schedule decoding in a persistent video worker, never on Tk's thread."""
         state['pending'] = None
         if not picker.winfo_exists():
             return
         index = _preview_frame_index(picker_slider.get(), total)
-        frame = preview_target_frame(index)
-        if frame is None:
-            state['ready'] = False
-            feedback.configure(text='Unable to read this frame. Try another position.')
-            generate_button.configure(state='disabled')
-            return
-        original = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        original = ImageOps.contain(
-            original, (800, max(200, min(320, dialog_height - 365))),
-            Image.LANCZOS
-        )
-        shown = ctk.CTkImage(
-            light_image=original, dark_image=original, size=original.size
-        )
-        frame_label.configure(image=shown, text='')
-        frame_label.image = shown
-        state['shown'] = index
-        state['ready'] = True
-        state['processed'] = False
-        generate_button.configure(state='normal', text='Generate preview')
-        feedback.configure(text='Original frame · No face swap applied yet')
+        state['requested'] = frame_reader.request(index)
 
     def schedule_frame(value) -> None:
         index = _preview_frame_index(value, total)
-        if index == state['shown'] and state['pending'] is None:
+        if index == state['shown'] and state['pending'] is None and state['ready']:
             return
         show_position(index)
-        # Discard the previous processed image *immediately* when selecting
-        # another frame. The next image is decoded from the original video.
+        # Discard a previous *processed* image when selecting another frame.
+        # While seeking, keep the last original thumbnail visible (avoids
+        # unnecessary flicker). The next image is always from original media.
+        if state['processed']:
+            frame_label.configure(image=None, text='Loading original frame…')
+            frame_label.image = None
         state['ready'] = False
         state['processed'] = False
-        frame_label.configure(image=None, text='Loading original frame…')
-        frame_label.image = None
+        state['frame'] = None
+        state['requested'] = None
         feedback.configure(text='Loading original frame · Preview discarded')
         generate_button.configure(state='disabled', text='Generate preview')
         if state['pending'] is not None:
             picker.after_cancel(state['pending'])
-        # Debounce seeking while the slider is dragged; model inference is
-        # reserved for Generate preview, never for navigation.
-        state['pending'] = picker.after(120, load_original_frame)
+        # Coalesce rapid slider motion: only decode the final selected position.
+        state['pending'] = picker.after(100, load_original_frame)
 
     picker_slider.configure(command=schedule_frame)
     if total > 1:
@@ -1794,6 +1820,11 @@ def open_preview_frame_picker() -> None:
         if state['pending'] is not None:
             picker.after_cancel(state['pending'])
             state['pending'] = None
+        if state['poll'] is not None:
+            picker.after_cancel(state['poll'])
+            state['poll'] = None
+        state['frame'] = None
+        frame_reader.close()
         picker.destroy()
 
     def generate_preview() -> None:
@@ -1813,7 +1844,8 @@ def open_preview_frame_picker() -> None:
             success = update_preview(
                 index,
                 destination_label=frame_label,
-                display_bounds=(800, max(200, min(320, dialog_height - 365)))
+                display_bounds=(800, max(200, min(320, dialog_height - 365))),
+                input_frame=state['frame']
             )
         except Exception as error:
             traceback.print_exc()
@@ -1870,6 +1902,7 @@ def open_preview_frame_picker() -> None:
     picker.protocol('WM_DELETE_WINDOW', close_picker)
     if total > 1:
         show_position(_preview_frame_index(picker_slider.get(), total))
+    state['poll'] = picker.after(60, show_original_result)
     load_original_frame()
 
 
@@ -1883,14 +1916,19 @@ def show_processed_preview(index: int) -> None:
 
 
 def update_preview(frame_number: int = 0, *, destination_label=None,
-                   display_bounds=None) -> bool:
+                   display_bounds=None, input_frame=None) -> bool:
     if not ((modules.globals.source_path or modules.globals.face_assignments)
             and preview_target_count()):
         return False
     if modules.globals.vr_stereo_mode and not modules.globals.face_assignments:
         update_status('VR / Stereo mode requires a mapped person from step 02.')
         return False
-    temp_frame = preview_target_frame(_preview_frame_index(frame_number, preview_target_count()))
+    # Reuse the exact selected original frame already decoded by the timeline
+    # worker; do not open the same video again just to generate a preview.
+    temp_frame = (
+        input_frame.copy() if input_frame is not None else
+        preview_target_frame(_preview_frame_index(frame_number, preview_target_count()))
+    )
     if temp_frame is None:
         update_status('Cannot read selected preview frame.')
         return False
