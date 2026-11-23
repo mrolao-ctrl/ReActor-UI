@@ -38,7 +38,7 @@ class FFmpegExtractionTests(unittest.TestCase):
 
     def test_ffmpeg_streams_frame_counts_during_gui_extraction(self):
         class FakeProcess:
-            stdout = ['frame=0\\n', 'frame=125\\n', 'frame=1319\\n']
+            stdout = ['frame=0\n', 'frame=125\n', 'frame=1319\n']
 
             def __enter__(self):
                 return self
