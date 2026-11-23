@@ -72,6 +72,9 @@ SECONDARY_HOVER = '#2E3D62'
 
 img_ft, vid_ft = modules.globals.file_types
 
+# Keep the Media Library preview compact enough to fit the first workflow page.
+MEDIA_THUMBNAIL_SIZE = (160, 160)
+
 WORKFLOW_TITLES = (
     '01   SELECT MEDIA',
     '02   MAP FACES',
@@ -313,28 +316,39 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
     target_card = ctk.CTkFrame(
         media, fg_color=CARD, corner_radius=12
     )
-    target_card.grid(row=2, column=0, columnspan=2, padx=20, pady=(0, 18), sticky='nsew')
-    target_card.grid_columnconfigure(0, weight=1)
+    target_card.grid(row=2, column=0, columnspan=2,
+                     padx=20, pady=(0, 14), sticky='ew')
+    target_card.grid_columnconfigure(0, weight=2)
+    target_card.grid_columnconfigure(1, weight=3)
     ctk.CTkLabel(
         target_card, text='TARGET MEDIA', anchor='w',
         font=ctk.CTkFont(size=12, weight='bold'),
         text_color=SUBTLE
-    ).grid(row=0, column=0, padx=15, pady=(12, 3), sticky='ew')
+    ).grid(row=0, column=0, columnspan=2,
+           padx=15, pady=(10, 4), sticky='ew')
+
+    # The thumbnail and both media actions share one compact row, rather
+    # than stacking tall previews and buttons below the visible page.
     target_label = ctk.CTkLabel(
-        target_card, text='No target selected', height=210, wraplength=720
+        target_card, text='No target selected', height=164, wraplength=260
     )
-    target_label.grid(row=1, column=0, padx=15, pady=(0, 12), sticky='nsew')
+    target_label.grid(row=1, column=0, padx=(15, 8),
+                      pady=(0, 12), sticky='nsew')
+
+    target_actions = ctk.CTkFrame(target_card, fg_color='transparent')
+    target_actions.grid(row=1, column=1, padx=(8, 16),
+                        pady=(0, 12), sticky='nsew')
     ctk.CTkButton(
-        target_card, text='Select target video / image',
-        command=select_target_path, height=36
-    ).grid(row=2, column=0, padx=15, pady=(0, 7), sticky='ew')
+        target_actions, text='Select target video / image',
+        command=select_target_path, height=40
+    ).pack(fill='x', pady=(24, 10))
     ctk.CTkButton(
-        target_card, text='Use existing PNG frames',
-        command=select_frames_directory, height=36,
+        target_actions, text='Use existing PNG frames',
+        command=select_frames_directory, height=40,
         fg_color=SECONDARY_BG,
         text_color=TEXT,
         hover_color=SECONDARY_HOVER
-    ).grid(row=3, column=0, padx=15, pady=(0, 15), sticky='ew')
+    ).pack(fill='x')
 
     people = _section(
         content, '02   PEOPLE & SOURCE PHOTOS',
@@ -1299,7 +1313,7 @@ def select_frames_directory() -> None:
     modules.globals.target_face_embedding = None
     modules.globals.face_assignments.clear()
     update_assignments_label()
-    image = render_image_preview(first, (200, 200))
+    image = render_image_preview(first, MEDIA_THUMBNAIL_SIZE)
     target_label.configure(
         image=image, text=f'{Path(folder).name} — {len(paths)} PNGs',
         compound='top'
@@ -1372,9 +1386,9 @@ def select_target_path() -> None:
         return
     try:
         if is_image(target_path):
-            thumbnail = render_image_preview(target_path, (200, 200))
+            thumbnail = render_image_preview(target_path, MEDIA_THUMBNAIL_SIZE)
         elif is_video(target_path):
-            thumbnail = render_video_preview(target_path, (200, 200))
+            thumbnail = render_video_preview(target_path, MEDIA_THUMBNAIL_SIZE)
         else:
             update_status('Not a supported image or video file.')
             return
