@@ -22,15 +22,20 @@ def function_source(name):
 
 
 class CompactMediaLayoutTests(unittest.TestCase):
-    def test_small_thumbnail_and_both_buttons_share_one_grid_row(self):
+    def test_left_text_sized_buttons_and_larger_right_thumbnail_share_one_row(self):
         root = function_source('create_root')
-        self.assertIn('MEDIA_THUMBNAIL_SIZE = (160, 160)', SOURCE)
-        self.assertIn("target_card.grid_columnconfigure(0, weight=2)", root)
-        self.assertIn("target_card.grid_columnconfigure(1, weight=3)", root)
+        self.assertIn('MEDIA_THUMBNAIL_SIZE = (280, 160)', SOURCE)
+        self.assertIn("target_card.grid_columnconfigure(0, weight=0)", root)
+        self.assertIn("target_card.grid_columnconfigure(1, weight=1)", root)
         self.assertIn("target_label = ctk.CTkLabel(", root)
-        self.assertIn("text='No target selected', height=164, wraplength=260", root)
-        self.assertIn("target_label.grid(row=1, column=0", root)
-        self.assertIn("target_actions.grid(row=1, column=1", root)
+        self.assertIn("text='No target selected', height=164, wraplength=500", root)
+        self.assertIn("target_label.grid(row=1, column=1", root)
+        self.assertIn("target_actions.grid(row=1, column=0", root)
+        self.assertIn("media_button_font = ctk.CTkFont(size=14)", root)
+        self.assertIn("width=media_button_font.measure('Select target video / image') + 36", root)
+        self.assertIn("width=media_button_font.measure('Use existing PNG frames') + 36", root)
+        self.assertIn(").pack(anchor='w'", root)
+        self.assertNotIn(").pack(fill='x'", root)
         self.assertIn("target_actions, text='Select target video / image'", root)
         self.assertIn("target_actions, text='Use existing PNG frames'", root)
         self.assertNotIn("text='No target selected', height=210", root)
