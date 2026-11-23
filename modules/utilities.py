@@ -179,16 +179,20 @@ def detect_fps(target_path: str) -> float:
     return 30.0
 
 
-def extract_frames(target_path: str) -> None:
+def extract_frames(target_path: str, total_frames: int = 0) -> None:
     job_control.check_cancelled()
     temp_directory_path = get_temp_directory_path(target_path)
     # Decode in software: forced auto-hardware decoding may fail on Windows
     # for formats that otherwise decode correctly. -y also permits a retry
     # after a previous incomplete extraction left numbered PNGs behind.
+    # Only enable streaming progress for active GUI jobs; CLI extraction retains
+    # its original command and error-reporting behaviour.
+    stage = 'Extracting frames' if job_control.active() else None
     try:
         run_ffmpeg(
             ['-y', '-i', target_path, '-pix_fmt', 'rgb24',
              os.path.join(temp_directory_path, '%04d.png')],
+            progress_stage=stage, progress_total=max(0, int(total_frames)),
             use_hwaccel=False, raise_on_error=True
         )
     except RuntimeError as error:
