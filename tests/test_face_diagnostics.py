@@ -131,7 +131,6 @@ class FaceDiagnosticsTests(unittest.TestCase):
         self.assertIn('original_frame.copy()', diag)
         self.assertIn('threading.Thread(', diag)
         self.assertIn('analyse_preview_faces(', diag)
-        self.assertIn('match_distinct_faces(', swap) if False else None
         self.assertIn('swap_assigned_faces(', swap)
         self.assertNotIn('face_diagnostics', swap)
 
