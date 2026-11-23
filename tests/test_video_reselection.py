@@ -112,7 +112,7 @@ class VideoSelectionRegressionTests(unittest.TestCase):
             'ROOT': object(), 'PREVIEW': preview, 'target_label': label,
             'is_image': lambda path: False,
             'is_video': lambda path: True,
-            'MEDIA_THUMBNAIL_SIZE': (160, 160),
+            'MEDIA_THUMBNAIL_SIZE': (280, 160),
             'render_video_preview': Mock(side_effect=RuntimeError('cannot read')),
             'render_image_preview': Mock(),
             'update_assignments_label': Mock(),
@@ -148,7 +148,7 @@ class VideoSelectionRegressionTests(unittest.TestCase):
             'img_ft': ('Image', '*.png'), 'vid_ft': ('Video', '*.mp4'),
             'ROOT': object(), 'PREVIEW': preview, 'target_label': label,
             'is_image': lambda path: False, 'is_video': lambda path: True,
-            'MEDIA_THUMBNAIL_SIZE': (160, 160),
+            'MEDIA_THUMBNAIL_SIZE': (280, 160),
             'render_video_preview': Mock(return_value=thumbnail),
             'render_image_preview': Mock(),
             'update_assignments_label': Mock(), 'update_status': Mock()
