@@ -20,7 +20,7 @@ from modules.face_selector import normalized_embedding
 from modules.capturer import get_video_frame, get_video_frame_total
 from modules.preview_reader import (
     FramePreviewReader, shared_video_preview_reader,
-    clear_shared_video_preview_reader,
+    shared_video_preview_metadata, clear_shared_video_preview_reader,
 )
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
@@ -1351,6 +1351,9 @@ def preview_target_count() -> int:
     if modules.globals.frames_directory:
         return len(FRAMES_PREVIEW_PATHS)
     if is_video(modules.globals.target_path):
+        metadata = shared_video_preview_metadata(modules.globals.target_path)
+        if metadata and metadata[0] > 0:
+            return metadata[0]
         return get_video_frame_total(modules.globals.target_path)
     return 1 if is_image(modules.globals.target_path) else 0
 
@@ -1769,14 +1772,10 @@ def open_preview_frame_picker() -> None:
     )
     count_label.pack(pady=(0, 4))
 
-    fps = 0.0
-    if is_video(modules.globals.target_path):
-        capture = cv2.VideoCapture(modules.globals.target_path)
-        try:
-            if capture.isOpened():
-                fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
-        finally:
-            capture.release()
+    metadata = shared_video_preview_metadata(video_path) if video_path else None
+    fps = metadata[1] if metadata else 0.0
+    # On the very first opening, the reader fetches FPS together with its
+    # initial frame; there is no need to open another VideoCapture on Tk.
 
     picker_slider = ctk.CTkSlider(
         picker, from_=0, to=max(1, total - 1),
@@ -1793,6 +1792,7 @@ def open_preview_frame_picker() -> None:
 
     def show_original_result() -> None:
         """Poll the reader on Tk's thread; ignore stale responses."""
+        nonlocal fps
         if not picker.winfo_exists():
             return
         result = frame_reader.latest()
@@ -1817,6 +1817,11 @@ def open_preview_frame_picker() -> None:
                     frame_label.image = shown
                     state['frame'] = original
                     state['shown'] = index
+                    if video_path and fps <= 0:
+                        info = shared_video_preview_metadata(video_path)
+                        if info and info[1] > 0:
+                            fps = info[1]
+                            show_position(index)
                     state['ready'] = True
                     state['processed'] = False
                     generate_button.configure(state='normal', text='Generate preview')
