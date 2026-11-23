@@ -899,10 +899,21 @@ def _drain_events() -> None:
             rate = event['rate']
             speed = (f'{rate:.2f} frames/s' if rate >= 1 else
                      f'{1 / rate:.2f} s/frame' if rate > 0 else 'calculating speed')
-            progress_label.configure(
-                text=f"{event['stage']}  ·  {done}/{total} frames  ·  "
-                     f"{percent:.1f}%  ·  {speed}  ·  ETA {_format_duration(event['eta'])}"
-            )
+            if event['stage'] == 'Extracting frames':
+                # Show the actual FFmpeg frame counter in the status line and
+                # the progress footer, instead of a static "Extracting frames".
+                counter = (f'Extracting frame {done:,} of {total:,}' if total
+                           else f'Extracting frame {done:,} (total unavailable)')
+                status_label.configure(text=counter)
+                progress_label.configure(
+                    text=f"{counter}  ·  {percent:.1f}%  ·  {speed}"
+                         f"  ·  ETA {_format_duration(event['eta'])}"
+                )
+            else:
+                progress_label.configure(
+                    text=f"{event['stage']}  ·  {done}/{total} frames  ·  "
+                         f"{percent:.1f}%  ·  {speed}  ·  ETA {_format_duration(event['eta'])}"
+                )
         elif kind == 'finished':
             _processing_active = False
             aborted = event.get('aborted', False)
