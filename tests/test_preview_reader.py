@@ -41,6 +41,8 @@ class FakeCapture:
     def get(self, key):
         if key == cv2.CAP_PROP_FPS:
             return 30.0
+        if key == cv2.CAP_PROP_FRAME_COUNT:
+            return 10000
         raise AssertionError(f'Unexpected property {key}')
 
     def set(self, key, value):
