@@ -25,6 +25,44 @@ class FFmpegExtractionTests(unittest.TestCase):
             self.assertFalse(kwargs['use_hwaccel'])
             self.assertTrue(kwargs['raise_on_error'])
 
+    def test_gui_extraction_publishes_current_and_total_frame_counts(self):
+        with patch.object(util.job_control, 'active', return_value=True), \
+             patch.object(util, 'run_ffmpeg', return_value=True) as run:
+            util.extract_frames('sample.mp4', total_frames=1319)
+        args, kwargs = run.call_args
+        self.assertEqual('Extracting frames', kwargs['progress_stage'])
+        self.assertEqual(1319, kwargs['progress_total'])
+        self.assertFalse(kwargs['use_hwaccel'])
+        self.assertTrue(kwargs['raise_on_error'])
+        self.assertIn('%04d.png', args[0][-1])
+
+    def test_ffmpeg_streams_frame_counts_during_gui_extraction(self):
+        class FakeProcess:
+            stdout = ['frame=0\\n', 'frame=125\\n', 'frame=1319\\n']
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def wait(self):
+                return 0
+
+        with patch.object(util, '_start_ffmpeg', return_value=FakeProcess()) as start, \
+             patch.object(util.progress_events, 'report') as report, \
+             patch.object(util.job_control, 'register_process'), \
+             patch.object(util.job_control, 'unregister_process'):
+            self.assertTrue(util.run_ffmpeg(
+                ['-y', '-i', 'sample.mp4', '%04d.png'],
+                progress_stage='Extracting frames', progress_total=1319,
+                use_hwaccel=False, raise_on_error=True,
+            ))
+        self.assertIn('-progress', start.call_args.args[0])
+        self.assertIn('pipe:1', start.call_args.args[0])
+        report.assert_any_call('Extracting frames', 125, 1319)
+        report.assert_any_call('Extracting frames', 1319, 1319)
+
     def test_software_decode_disables_forced_hardware_acceleration(self):
         with patch.object(util.subprocess, 'check_output', return_value=b'') as output:
             self.assertTrue(util.run_ffmpeg(
