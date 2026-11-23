@@ -17,6 +17,7 @@ from modules import progress_events, job_control
 from modules.app_settings import load_settings, save_settings, validate, recommended_models_directory
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import normalized_embedding
+from modules.face_diagnostics_ui import FaceDiagnosticDialog
 from modules.capturer import get_video_frame, get_video_frame_total
 from modules.preview_reader import (
     FramePreviewReader, shared_video_preview_reader,
@@ -1751,7 +1752,8 @@ def open_preview_frame_picker() -> None:
 
     state = {
         'pending': None, 'poll': None, 'requested': None, 'frame': None,
-        'shown': None, 'ready': False, 'processed': False
+        'shown': None, 'ready': False, 'processed': False,
+        'diagnostics': None
     }
     video_path = (modules.globals.target_path
                   if is_video(modules.globals.target_path) else None)
@@ -1825,6 +1827,9 @@ def open_preview_frame_picker() -> None:
                     state['ready'] = True
                     state['processed'] = False
                     generate_button.configure(state='normal', text='Generate preview')
+                    diagnose_button.configure(
+                        state='normal' if modules.globals.face_assignments else 'disabled'
+                    )
                     feedback.configure(text='Original frame · No face swap applied yet')
         state['poll'] = picker.after(60, show_original_result)
 
@@ -1840,6 +1845,7 @@ def open_preview_frame_picker() -> None:
         index = _preview_frame_index(value, total)
         if index == state['shown'] and state['pending'] is None and state['ready']:
             return
+        close_diagnostics()
         show_position(index)
         # Discard a previous *processed* image when selecting another frame.
         # While seeking, keep the last original thumbnail visible (avoids
@@ -1853,6 +1859,7 @@ def open_preview_frame_picker() -> None:
         state['requested'] = None
         feedback.configure(text='Loading original frame · Preview discarded')
         generate_button.configure(state='disabled', text='Generate preview')
+        diagnose_button.configure(state='disabled')
         if state['pending'] is not None:
             picker.after_cancel(state['pending'])
         # Coalesce rapid slider motion: only decode the final selected position.
@@ -1866,6 +1873,23 @@ def open_preview_frame_picker() -> None:
 
     feedback.pack(pady=(0, 8))
 
+    def close_diagnostics() -> None:
+        if state['diagnostics'] is not None:
+            state['diagnostics'].close()
+            state['diagnostics'] = None
+
+    def diagnose_selected_frame() -> None:
+        if not state['ready'] or state['frame'] is None or _processing_active:
+            return
+        if state['shown'] != _preview_frame_index(picker_slider.get(), total):
+            return
+        close_diagnostics()
+        state['diagnostics'] = FaceDiagnosticDialog(
+            picker, state['frame'], modules.globals.face_assignments,
+            get_many_faces, vr_stereo=bool(modules.globals.vr_stereo_mode),
+            icon_setter=_set_app_icon
+        )
+
     def close_picker() -> None:
         if state['pending'] is not None:
             picker.after_cancel(state['pending'])
@@ -1874,6 +1898,7 @@ def open_preview_frame_picker() -> None:
             picker.after_cancel(state['poll'])
             state['poll'] = None
         state['frame'] = None
+        close_diagnostics()
         if video_path:
             # Keep its open VideoCapture and last ORIGINAL frame ready for next
             # Preview; discard only this dialog's outstanding frame requests.
@@ -1953,6 +1978,14 @@ def open_preview_frame_picker() -> None:
     )
     generate_button.grid(
         row=1, column=2, padx=(0, 14), pady=(6, 12), sticky='e'
+    )
+    diagnose_button = ctk.CTkButton(
+        actions, text='Diagnose faces', width=140, height=38,
+        fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+        text_color=TEXT, state='disabled', command=diagnose_selected_frame
+    )
+    diagnose_button.grid(
+        row=1, column=1, padx=(8, 10), pady=(6, 12), sticky='e'
     )
     picker.protocol('WM_DELETE_WINDOW', close_picker)
     if total > 1:
