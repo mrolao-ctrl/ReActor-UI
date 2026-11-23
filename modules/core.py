@@ -261,10 +261,13 @@ def start() -> None:
     update_status('Creating temp resources...')
     create_temp(modules.globals.target_path)
     job_control.check_cancelled()
+    # Reuse the same frame count for live extraction progress and the existing
+    # recovery list, avoiding a second metadata probe after extraction.
+    total_frames = get_video_frame_total(modules.globals.target_path)
     update_status('Extracting frames...')
-    extract_frames(modules.globals.target_path)
+    extract_frames(modules.globals.target_path, total_frames=total_frames)
     temp_dir = get_temp_directory_path(modules.globals.target_path)
-    temp_frame_paths = expected_frame_paths(temp_dir, get_video_frame_total(modules.globals.target_path))
+    temp_frame_paths = expected_frame_paths(temp_dir, total_frames)
     repair_frames(temp_frame_paths, 'extraction')
     for frame_processor in get_frame_processors_modules(modules.globals.frame_processors):
         job_control.check_cancelled()
