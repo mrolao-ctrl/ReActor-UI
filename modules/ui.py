@@ -18,7 +18,10 @@ from modules.app_settings import load_settings, save_settings, validate, recomme
 from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import normalized_embedding
 from modules.capturer import get_video_frame, get_video_frame_total
-from modules.preview_reader import FramePreviewReader
+from modules.preview_reader import (
+    FramePreviewReader, shared_video_preview_reader,
+    clear_shared_video_preview_reader,
+)
 from modules.processors.frame.core import get_frame_processors_modules
 from modules.utilities import is_image, is_video, resolve_relative_path
 
@@ -962,6 +965,7 @@ def request_close(destroy: Callable[[], None]) -> None:
         update_status('Processing is running. Use Abort to stop before closing.')
         return
     progress_events.set_sink(None)
+    clear_shared_video_preview_reader()
     destroy()
 
 
@@ -1321,6 +1325,7 @@ def select_frames_directory() -> None:
         update_status('No readable PNG found in selected folder.')
         return
     PREVIEW.withdraw()
+    clear_shared_video_preview_reader()
     PREVIEW_FRAME_INDEX = 0
     FRAMES_PREVIEW_PATHS = [str(p) for p in paths]
     modules.globals.frames_directory = folder
@@ -1416,6 +1421,7 @@ def select_target_path() -> None:
 
     # Only commit the new target once the preview is successfully generated.
     PREVIEW.withdraw()
+    clear_shared_video_preview_reader()
     PREVIEW_FRAME_INDEX = 0
     modules.globals.target_path = target_path
     modules.globals.output_path = None
@@ -1744,11 +1750,18 @@ def open_preview_frame_picker() -> None:
         'pending': None, 'poll': None, 'requested': None, 'frame': None,
         'shown': None, 'ready': False, 'processed': False
     }
-    frame_reader = FramePreviewReader(
-        video_path=modules.globals.target_path if is_video(modules.globals.target_path) else None,
-        frame_paths=FRAMES_PREVIEW_PATHS if modules.globals.frames_directory else None,
-        image_path=modules.globals.target_path if is_image(modules.globals.target_path) else None,
-        max_size=(800, max(200, min(320, dialog_height - 365)))
+    video_path = (modules.globals.target_path
+                  if is_video(modules.globals.target_path) else None)
+    preview_size = (800, max(200, min(320, dialog_height - 365)))
+    # Reuse the same decoder on subsequent Preview openings of this video.
+    # PNG folders and single images retain their independent short-lived reader.
+    frame_reader = (
+        shared_video_preview_reader(video_path, max_size=preview_size)
+        if video_path else FramePreviewReader(
+            frame_paths=FRAMES_PREVIEW_PATHS if modules.globals.frames_directory else None,
+            image_path=modules.globals.target_path if is_image(modules.globals.target_path) else None,
+            max_size=preview_size
+        )
     )
     count_label = ctk.CTkLabel(
         picker, text='', text_color=TEXT,
@@ -1856,7 +1869,12 @@ def open_preview_frame_picker() -> None:
             picker.after_cancel(state['poll'])
             state['poll'] = None
         state['frame'] = None
-        frame_reader.close()
+        if video_path:
+            # Keep its open VideoCapture and last ORIGINAL frame ready for next
+            # Preview; discard only this dialog's outstanding frame requests.
+            frame_reader.invalidate()
+        else:
+            frame_reader.close()
         picker.destroy()
 
     def generate_preview() -> None:
