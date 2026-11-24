@@ -93,6 +93,29 @@ def _best_identity(face, assignments):
     return top_index
 
 
+def detect_faces_for_picker(frame, get_faces):
+    """Show rotated alternatives only when the ordinary picker finds no face.
+
+    The user still chooses manually; rotating the picker image is not needed.
+    """
+    original = list(get_faces(frame) or [])
+    if original:
+        return original
+    faces = []
+    for angle in ADAPTIVE_ANGLES:
+        rotated, inverse = _rotate_with_transform(frame, angle)
+        for detected in get_faces(rotated) or []:
+            mapped = _unrotate_face(detected, inverse, frame.shape)
+            if mapped is None:
+                continue
+            if all(bbox_iou(mapped.bbox, other.bbox) < 0.5
+                   for other in faces):
+                faces.append(mapped)
+        if faces:
+            break
+    return faces
+
+
 def find_rotated_matches(frame, get_faces, assignments, accepted,
                          check_cancelled=None):
     """Return fresh (assignment index, original-coordinate face) matches.
