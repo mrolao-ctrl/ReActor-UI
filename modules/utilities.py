@@ -164,19 +164,90 @@ def run_ffmpeg(args: List[str], progress_stage: str = None,
         return False
 
 
+def _detect_fps_with_opencv(target_path: str) -> float:
+    """Get FPS without spawning a process (Windows mount-point fallback)."""
+    import cv2
+    import math
+
+    capture = cv2.VideoCapture(target_path)
+    try:
+        if not capture.isOpened():
+            raise RuntimeError(f'OpenCV cannot open the selected video: {target_path}')
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+        if not math.isfinite(fps) or fps <= 0.0:
+            raise RuntimeError(f'Video does not report a valid FPS: {target_path}')
+        return fps
+    finally:
+        capture.release()
+
+
 def detect_fps(target_path: str) -> float:
-    command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=r_frame_rate', '-of', 'default=noprint_wrappers=1:nokey=1', target_path]
-    job_control.check_cancelled()
-    output = subprocess.check_output(
-        command, **_windows_subprocess_kwargs()
-    ).decode().strip().split('/')
+    """Read original FPS; recover safely if Windows refuses to start ffprobe.
+
+    Keep-fps runs *after* face swapping. A failed ffprobe must never force
+    another full face-swap pass when OpenCV can read the same video metadata.
+    Use the existing WinError 448-aware, windowless subprocess launcher, and
+    fall back to OpenCV only when probing fails.
+    """
+    import math
+    command = [
+        'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=r_frame_rate',
+        '-of', 'default=noprint_wrappers=1:nokey=1', target_path
+    ]
     job_control.check_cancelled()
     try:
-        numerator, denominator = map(int, output)
-        return numerator / denominator
-    except Exception:
-        pass
-    return 30.0
+        # _start_ffmpeg is shared by the ffmpeg/ffprobe executables. Its
+        # Windows retry resolves junctions and uses a safe local working dir.
+        # stdout/stderr are pipes; no black terminal window is displayed.
+        with _start_ffmpeg(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        ) as process:
+            job_control.register_process(process)
+            try:
+                output, errors = process.communicate()
+            finally:
+                job_control.unregister_process(process)
+            job_control.check_cancelled()
+            if process.returncode != 0:
+                message = errors.decode('utf-8', errors='replace')[-500:]
+                raise RuntimeError(
+                    f'ffprobe exited with code {process.returncode}: {message}'
+                )
+        parts = output.decode('utf-8', errors='replace').strip().split('/')
+        if len(parts) == 2:
+            numerator, denominator = map(int, parts)
+            rate = numerator / denominator if denominator else 0.0
+        elif len(parts) == 1:
+            rate = float(parts[0])
+        else:
+            rate = 0.0
+        if math.isfinite(rate) and rate > 0:
+            return rate
+        raise RuntimeError('ffprobe returned an invalid frame rate.')
+    except (OSError, RuntimeError, ValueError, UnicodeError) as probe_error:
+        job_control.check_cancelled()
+        print(
+            f'[REACTOR.FPS] ffprobe unavailable ({probe_error}); '
+            'trying OpenCV without launching another process.',
+            flush=True
+        )
+        try:
+            fps = _detect_fps_with_opencv(target_path)
+        except (OSError, RuntimeError, ValueError) as cv_error:
+            raise RuntimeError(
+                f'Could not determine the video FPS. ffprobe: {probe_error}. '
+                f'OpenCV: {cv_error}. All processed PNG frames remain in '
+                f'{get_temp_directory_path(target_path)}. '
+                'No face swap needs to be repeated to export these PNGs.'
+            ) from cv_error
+        job_control.check_cancelled()
+        print(
+            f'[REACTOR.FPS] Using OpenCV FPS: {fps:g} '
+            '(processed PNGs remain unchanged).',
+            flush=True
+        )
+        return fps
 
 
 def extract_frames(target_path: str, total_frames: int = 0) -> None:
