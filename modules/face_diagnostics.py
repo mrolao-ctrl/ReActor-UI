@@ -12,24 +12,15 @@ import numpy as np
 
 from modules.face_selector import MIN_MARGIN, MIN_SIMILARITY, normalized_embedding
 from modules.multi_face import match_distinct_faces
+from modules.identity_references import person_scores
+from modules.recognition_enhancements import ADAPTIVE_ANGLES
 from modules.vr_stereo import (
     _paired_assignments, stereo_eye_regions, match_reusable_faces
 )
 
 
 def _scores(face, assignments):
-    embedding = normalized_embedding(face)
-    values = []
-    for mapping in assignments:
-        reference = np.asarray(mapping.get('embedding'), dtype=np.float32).reshape(-1)
-        norm = float(np.linalg.norm(reference))
-        if (embedding is None or reference.shape != embedding.shape
-                or not np.isfinite(norm) or norm < 1e-8):
-            values.append(None)
-        else:
-            values.append(float(np.dot(embedding, reference / norm)))
-    return values
-
+    return person_scores(face, assignments)
 
 def _reason(scores, selected, assignment_index, face_index, all_scores,
             is_stereo, accepted, all_matches):
@@ -103,9 +94,9 @@ def _rotate_expand(image, degrees):
     )
 
 
-def _rotation_trials(image, assignments, detect_faces, stereo):
+def _rotation_trials(image, assignments, detect_faces, stereo, adaptive=False):
     trials = []
-    for angle in (-45, 45):
+    for angle in (ADAPTIVE_ANGLES if adaptive else (-45, 45)):
         rotated = _rotate_expand(image, angle)
         faces = list(detect_faces(rotated) or [])
         if stereo:
@@ -138,7 +129,7 @@ def _rotation_trials(image, assignments, detect_faces, stereo):
 
 
 def analyse_preview_faces(frame, assignments, detect_faces, *, vr_stereo=False,
-                          check_cancelled=None):
+                          adaptive=False, check_cancelled=None):
     """Explain face matching on an original, unaltered preview frame.
 
     Output contains numeric similarities and the production matcher outcome.
@@ -190,7 +181,7 @@ def analyse_preview_faces(frame, assignments, detect_faces, *, vr_stereo=False,
         # A rotation trial is a diagnostic hint only, never an implicit
         # replacement of the actual production matching decision.
         rotation = (
-            _rotation_trials(image, assignments, detect_faces, vr_stereo)
+            _rotation_trials(image, assignments, detect_faces, vr_stereo, adaptive=adaptive)
             if not mapping else []
         )
         sections.append({
@@ -202,5 +193,11 @@ def analyse_preview_faces(frame, assignments, detect_faces, *, vr_stereo=False,
         'min_similarity': MIN_SIMILARITY,
         'min_margin': MIN_MARGIN,
         'sections': sections,
-        'message': 'Rotation trials are diagnostic only; no video frames are changed.'
+        'message': (
+            'Rotations keep the normal identity threshold. '
+            'An accepted rotated result may be used by Adaptive detection '
+            'when that option is enabled; this diagnosis changes no pixels.'
+            if adaptive else
+            'Rotation trials are diagnostic only; no video frames are changed.'
+        )
     }

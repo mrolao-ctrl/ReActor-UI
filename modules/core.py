@@ -47,6 +47,10 @@ def parse_args() -> None:
     program.add_argument('--keep-audio', help='keep original audio', dest='keep_audio', action=argparse.BooleanOptionalAction, default=saved['keep_audio'])
     program.add_argument('--keep-frames', help='keep temporary frames', dest='keep_frames', action=argparse.BooleanOptionalAction, default=saved['keep_frames'])
     program.add_argument('--many-faces', help='process every face', dest='many_faces', action='store_true', default=False)
+    program.add_argument('--adaptive-face-detection', action=argparse.BooleanOptionalAction,
+                         default=saved['adaptive_face_detection'], help='try angled detection for unmatched mapped faces')
+    program.add_argument('--temporal-face-tracking', action=argparse.BooleanOptionalAction,
+                         default=saved['temporal_face_tracking'], help='sequentially reuse recently confirmed mapped identity')
     program.add_argument('--video-encoder', help='adjust output video encoder', dest='video_encoder', default=saved['video_encoder'], choices=['libx264', 'libx265', 'libvpx-vp9'])
     program.add_argument('--video-quality', help='adjust output video quality', dest='video_quality', type=int, default=saved['video_quality'], choices=range(52), metavar='[0-51]')
     program.add_argument('--enhancer-strength', help='GFPGAN blend strength 0..100', dest='enhancer_strength', type=int, default=saved['enhancer_strength'], choices=range(101))
@@ -77,6 +81,8 @@ def parse_args() -> None:
     modules.globals.keep_fps = args.keep_fps
     modules.globals.keep_audio = args.keep_audio
     modules.globals.keep_frames = args.keep_frames
+    modules.globals.adaptive_face_detection = args.adaptive_face_detection
+    modules.globals.temporal_face_tracking = args.temporal_face_tracking
     modules.globals.many_faces = args.many_faces
     modules.globals.video_encoder = args.video_encoder
     modules.globals.video_quality = args.video_quality

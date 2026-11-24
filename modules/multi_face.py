@@ -9,6 +9,8 @@ from typing import Any, Callable, Iterable, List, Tuple
 import numpy as np
 
 from modules.face_selector import MIN_MARGIN, MIN_SIMILARITY, normalized_embedding
+from modules.identity_references import face_similarity, reference_vectors
+from modules.recognition_enhancements import find_rotated_matches
 
 
 def prepare_assignments(assignments: Iterable[dict], load_face: Callable[[str], Any]) -> list:
@@ -17,14 +19,14 @@ def prepare_assignments(assignments: Iterable[dict], load_face: Callable[[str], 
     sources = {}
     for assignment in assignments:
         source_path = assignment['source_path']
-        ref = np.asarray(assignment['embedding'], dtype=np.float32).reshape(-1)
-        size = np.linalg.norm(ref)
-        if not np.isfinite(size) or size < 1e-8:
+        references = reference_vectors(assignment)
+        if not references:
             raise ValueError('Invalid identity embedding')
         if source_path not in sources:
             sources[source_path] = load_face(source_path)
         prepared.append({
-            'embedding': ref / size,
+            'embedding': references[0],
+            'embeddings': references,
             'source_face': sources[source_path],
             'source_path': source_path,
         })
@@ -45,19 +47,12 @@ def match_distinct_faces(
     detections = list(faces or [])
     if not detections or not assignments:
         return []
-    vectors = [normalized_embedding(face) for face in detections]
-    references = [np.asarray(a['embedding'], dtype=np.float32).reshape(-1)
-                  for a in assignments]
-
     scores = {}
-    for i, ref in enumerate(references):
-        norm = float(np.linalg.norm(ref))
-        if not np.isfinite(norm) or norm < 1e-8:
-            continue
-        ref = ref / norm
-        for j, vector in enumerate(vectors):
-            if vector is not None and vector.shape == ref.shape:
-                scores[i, j] = float(np.dot(ref, vector))
+    for i, assignment in enumerate(assignments):
+        for j, face in enumerate(detections):
+            score = face_similarity(face, assignment)
+            if score is not None:
+                scores[i, j] = score
 
     proposals = []
     for i, assignment in enumerate(assignments):
@@ -97,11 +92,34 @@ def swap_assigned_faces(
     assignments: list,
     get_faces: Callable[[Any], Iterable[Any]],
     swap_face: Callable[[Any, Any, Any], Any],
+    adaptive: bool = False,
+    tracker=None,
+    frame_index=None,
+    check_cancelled=None,
 ) -> tuple:
-    """Run face detection on unchanged frame; swap selected matches in turn."""
-    matches = match_distinct_faces(get_faces(frame), assignments)
+    """Match once against original pixels, then optionally rescue hard poses."""
+    detections = list(get_faces(frame) or [])
+    matches = match_distinct_faces(detections, assignments)
+    accepted = {
+        i: face for assignment, face in matches
+        for i, current in enumerate(assignments) if current is assignment
+    }
+    if adaptive and len(accepted) < len(assignments):
+        accepted.update(find_rotated_matches(
+            frame, get_faces, assignments, accepted,
+            check_cancelled=check_cancelled
+        ))
+    if tracker is not None and frame_index is not None:
+        accepted.update(tracker.augment(
+            'normal', frame_index, detections, accepted, assignments
+        ))
+
     boxes = []
-    for assignment, target in matches:
-        frame = swap_face(assignment['source_face'], target, frame)
+    # Preserve source/identity order; identify original faces before swapping.
+    for i in sorted(accepted):
+        if check_cancelled:
+            check_cancelled()
+        target = accepted[i]
+        frame = swap_face(assignments[i]['source_face'], target, frame)
         boxes.append(tuple(map(float, target.bbox)))
     return frame, boxes

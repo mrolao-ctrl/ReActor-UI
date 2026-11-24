@@ -19,6 +19,8 @@ DEFAULTS = {
     'keep_audio': True,
     'keep_frames': False,
     'vr_stereo_mode': False,
+    'adaptive_face_detection': False,
+    'temporal_face_tracking': False,
     'frames_fps': 30.0,
     'occlusion_protection': True,
     'occlusion_landmark_mode': 'auto',
@@ -130,6 +132,7 @@ def apply_to_globals(settings: dict, globals_module, decode_providers=None) -> N
     """Apply saved settings to the GUI's in-memory state, no model imports."""
     s = validate(settings)
     for key in ('keep_fps', 'keep_audio', 'keep_frames', 'vr_stereo_mode',
+                'adaptive_face_detection', 'temporal_face_tracking',
                 'frames_fps', 'max_memory', 'execution_threads', 'video_quality',
                 'video_encoder', 'occlusion_protection', 'occlusion_landmark_mode',
                 'enhancer_mode', 'enhancer_strength'):

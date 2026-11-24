@@ -19,6 +19,9 @@ keep_frames = None
 many_faces = None
 # Opt-in side-by-side VR: each half represents one eye of the same scene.
 vr_stereo_mode = False
+# Opt-in recognition for angled faces and short temporal identity continuity.
+adaptive_face_detection = False
+temporal_face_tracking = False
 # Unit-length reference embedding for the target person selected in the UI.
 # None means the original leftmost-face selection remains in effect.
 target_face_embedding = None

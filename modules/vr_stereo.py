@@ -13,6 +13,8 @@ from typing import Any, Callable, Iterable
 import numpy as np
 
 from modules.face_selector import MIN_MARGIN, MIN_SIMILARITY, normalized_embedding
+from modules.identity_references import face_similarity
+from modules.recognition_enhancements import find_rotated_matches
 
 
 def stereo_eye_regions(frame):
@@ -51,13 +53,12 @@ def match_reusable_faces(faces, assignments, min_similarity=MIN_SIMILARITY,
     Reject conflicts *between different reference identities* instead.
     Returns a dictionary of face index -> assignment index.
     """
-    refs = _references(assignments)
     matches = {}
     for face_index, face in enumerate(faces):
         candidates = sorted(
             ((score, assignment_index)
-             for assignment_index, ref in enumerate(refs)
-             if (score := _score(face, ref)) is not None),
+             for assignment_index, assignment in enumerate(assignments)
+             if (score := face_similarity(face, assignment)) is not None),
             reverse=True
         )
         if not candidates:
@@ -123,11 +124,10 @@ def pair_stereo_faces(left_faces, right_faces, left_shape, right_shape):
 
 def _can_inherit(face, index, assignments):
     """Relax a *paired* eye's identity threshold, not its identity margin."""
-    refs = _references(assignments)
-    own = _score(face, refs[index])
+    own = face_similarity(face, assignments[index])
     if own is None or own < 0.12:
         return False
-    rivals = [_score(face, ref) for i, ref in enumerate(refs) if i != index]
+    rivals = [face_similarity(face, ref) for i, ref in enumerate(assignments) if i != index]
     rivals = [score for score in rivals if score is not None]
     return not rivals or own - max(rivals) >= MIN_MARGIN
 
@@ -163,7 +163,8 @@ def picker_stereo_faces(frame, detect_faces: Callable[[Any], Iterable[Any]]):
 
 
 def swap_stereo_assigned_faces(frame, assignments, get_faces, swap_face,
-                               check_cancelled=None):
+                               check_cancelled=None, adaptive=False,
+                               tracker=None, frame_index=None):
     """Process the SBS eyes independently and record full-frame face boxes."""
     regions = stereo_eye_regions(frame)
     if len(regions) != 2 or not assignments:
@@ -178,6 +179,35 @@ def swap_stereo_assigned_faces(frame, assignments, get_faces, swap_face,
     left_matches, right_matches = _paired_assignments(
         left_faces, right_faces, assignments, left_eye.shape, right_eye.shape
     )
+    if adaptive:
+        for eye, faces, mapping in (
+            (left_eye, left_faces, left_matches),
+            (right_eye, right_faces, right_matches)
+        ):
+            accepted = {identity: faces[face_index]
+                        for face_index, identity in mapping.items()}
+            rotated = find_rotated_matches(
+                eye, get_faces, assignments, accepted,
+                check_cancelled=check_cancelled
+            )
+            for identity, face in rotated.items():
+                mapping[len(faces)] = identity
+                faces.append(face)
+    if tracker is not None and frame_index is not None:
+        for region, faces, mapping in (
+            ('left', left_faces, left_matches),
+            ('right', right_faces, right_matches)
+        ):
+            existing = {identity: faces[face_index]
+                        for face_index, identity in mapping.items()}
+            rescued = tracker.augment(
+                region, frame_index, faces, existing, assignments
+            )
+            for identity, face in rescued.items():
+                for face_index, candidate in enumerate(faces):
+                    if candidate is face and face_index not in mapping:
+                        mapping[face_index] = identity
+                        break
     boxes = []
     for eye, offset, faces, matches in (
         (left_eye, left_offset, left_faces, left_matches),

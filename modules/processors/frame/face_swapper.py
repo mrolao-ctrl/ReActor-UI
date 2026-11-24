@@ -12,6 +12,8 @@ from modules.face_analyser import get_one_face, get_many_faces
 from modules.face_selector import select_matching_face
 from modules.multi_face import prepare_assignments, swap_assigned_faces
 from modules.vr_stereo import swap_stereo_assigned_faces
+from modules.recognition_enhancements import TemporalIdentityTracker
+from modules import progress_events
 from modules.face_occlusion import (
     combine_visibility, get_visibility_mask, get_occluder_session, warn_once
 )
@@ -115,7 +117,8 @@ def swap_face(source_face: Face, target_face: Face, temp_frame: Frame) -> Frame:
 
 
 def process_frame(source_face: Face, temp_frame: Frame, frame_path=None,
-                  prepared_assignments=None) -> Frame:
+                  prepared_assignments=None, tracker=None,
+                  frame_index=None) -> Frame:
     # Multiple assignments are always evaluated against the original frame.
     # Later swaps cannot change who the next assignment matches.
     if prepared_assignments is None and isinstance(source_face, list):
@@ -127,12 +130,17 @@ def process_frame(source_face: Face, temp_frame: Frame, frame_path=None,
         if modules.globals.vr_stereo_mode:
             temp_frame, boxes = swap_stereo_assigned_faces(
                 temp_frame, prepared_assignments, get_many_faces,
-                swap_face, check_cancelled=job_control.check_cancelled
+                swap_face, check_cancelled=job_control.check_cancelled,
+                adaptive=bool(modules.globals.adaptive_face_detection),
+                tracker=tracker, frame_index=frame_index
             )
         else:
             # Non-VR path and conservative 1:1 matching stay unchanged.
             temp_frame, boxes = swap_assigned_faces(
-                temp_frame, prepared_assignments, get_many_faces, swap_face
+                temp_frame, prepared_assignments, get_many_faces, swap_face,
+                adaptive=bool(modules.globals.adaptive_face_detection),
+                tracker=tracker, frame_index=frame_index,
+                check_cancelled=job_control.check_cancelled
             )
         if frame_path is None:
             modules.globals.preview_face_boxes = boxes
@@ -163,17 +171,23 @@ def process_frame(source_face: Face, temp_frame: Frame, frame_path=None,
     return temp_frame
 
 
-def process_frames(source_face: Face, temp_frame_paths: List[str], progress: Any = None) -> None:
+def process_frames(source_face: Face, temp_frame_paths: List[str], progress: Any = None,
+                   tracker=None, frame_index=None) -> None:
     for temp_frame_path in temp_frame_paths:
         job_control.check_cancelled()
         try:
             temp_frame = read_image(temp_frame_path, 'extracted video frame')
         except UnreadableFrameError as error:
             print(f'[REACTOR.RECOVERY] Will restore unreadable frame after this stage: {error}')
+            if tracker is not None:
+                tracker.reset()
             if progress:
                 progress.update(1)
             continue
-        result = process_frame(source_face, temp_frame, frame_path=temp_frame_path)
+        result = process_frame(
+            source_face, temp_frame, frame_path=temp_frame_path,
+            tracker=tracker, frame_index=frame_index
+        )
         job_control.check_cancelled()
         write_frame(temp_frame_path, result)
         if progress:
@@ -192,4 +206,22 @@ def process_image(source_path: str, target_path: str, output_path: str) -> None:
 def process_video(source_path: str, temp_frame_paths: List[str]) -> None:
     job_control.check_cancelled()
     source_face = prepare_multi_assignments() if modules.globals.face_assignments else load_source_face(source_path)
-    modules.processors.frame.core.process_video(source_face, temp_frame_paths, process_frames, stage='Face Swap')
+    if modules.globals.temporal_face_tracking and modules.globals.face_assignments:
+        # Frame-level identities must be observed in chronological order.
+        # Do not use the normal ThreadPoolExecutor: it schedules frames out
+        # of order, which would silently assign the wrong identity.
+        from modules.processors.frame.core import FrameProgress
+        tracker = TemporalIdentityTracker()
+        progress_events.report('Face Swap', 0, len(temp_frame_paths))
+        with FrameProgress(total=len(temp_frame_paths), desc='Tracking faces',
+                           unit='frame', dynamic_ncols=True) as progress:
+            progress.stage = 'Face Swap'
+            for index, path in enumerate(temp_frame_paths):
+                job_control.check_cancelled()
+                process_frames(source_face, [path], progress,
+                               tracker=tracker, frame_index=index)
+            progress_events.report('Face Swap', progress.n, len(temp_frame_paths))
+    else:
+        modules.processors.frame.core.process_video(
+            source_face, temp_frame_paths, process_frames, stage='Face Swap'
+        )

@@ -14,7 +14,7 @@ from modules.face_diagnostics import analyse_preview_faces
 
 class FaceDiagnosticDialog:
     def __init__(self, parent, original_frame, assignments, detector,
-                 *, vr_stereo=False, icon_setter=None):
+                 *, vr_stereo=False, adaptive=False, icon_setter=None):
         self._queue = queue.Queue(maxsize=1)
         self._closed = False
         self._after_id = None
@@ -41,11 +41,18 @@ class FaceDiagnosticDialog:
         # Keep the session's original frame and mapping embeddings isolated;
         # the face detector does not see a processed Preview image.
         snapshot = [
-            {'embedding': item['embedding'].copy()} for item in assignments
+            {
+                'embedding': item['embedding'].copy(),
+                'embeddings': [
+                    ref.copy() for ref in item.get('embeddings') or
+                    [item['embedding']]
+                ]
+            }
+            for item in assignments
         ]
         worker = threading.Thread(
             target=self._analyse,
-            args=(original_frame.copy(), snapshot, detector, vr_stereo),
+            args=(original_frame.copy(), snapshot, detector, vr_stereo, adaptive),
             daemon=True, name='ReActorFaceDiagnostics'
         )
         worker.start()
@@ -57,10 +64,11 @@ class FaceDiagnosticDialog:
             font=ctk.CTkFont(size=13, weight='bold' if bold else 'normal')
         ).pack(fill='x', padx=12, pady=(5, 4))
 
-    def _analyse(self, frame, assignments, detector, vr_stereo):
+    def _analyse(self, frame, assignments, detector, vr_stereo, adaptive):
         try:
             data = analyse_preview_faces(
-                frame, assignments, detector, vr_stereo=vr_stereo
+                frame, assignments, detector, vr_stereo=vr_stereo,
+                adaptive=adaptive
             )
             error = None
         except Exception as exc:
