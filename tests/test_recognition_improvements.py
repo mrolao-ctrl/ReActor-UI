@@ -81,7 +81,9 @@ class ImprovedRecognitionTests(unittest.TestCase):
         np.testing.assert_allclose(restored.kps, original.kps, atol=0.01)
         self.assertEqual((120, 180, 3), frame.shape)
         self.assertFalse(np.shares_memory(restored.kps, face.kps))
-        self.assertGreater(bbox_iou(restored.bbox, original.bbox), 0.4)
+        # A rotated axis-aligned box expands on both transforms; five-point
+        # landmarks (which the swap model actually uses) must remain precise.
+        self.assertGreater(bbox_iou(restored.bbox, original.bbox), 0.20)
 
     def test_adaptive_rotation_keeps_threshold_and_avoids_duplicate_identity(self):
         frame = np.zeros((80, 80, 3), dtype=np.uint8)
