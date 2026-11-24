@@ -1555,11 +1555,16 @@ def open_face_picker(multiple: bool = False, reference_index=None) -> None:
             feedback.configure(text='Could not read this frame. Try another one.')
             return
 
+        from modules.recognition_enhancements import detect_faces_for_picker
+        detector = (
+            (lambda image: detect_faces_for_picker(image, get_many_faces))
+            if modules.globals.adaptive_face_detection else get_many_faces
+        )
         if modules.globals.vr_stereo_mode:
             from modules.vr_stereo import picker_stereo_faces
-            faces = picker_stereo_faces(frame, get_many_faces)
+            faces = picker_stereo_faces(frame, detector)
         else:
-            faces = get_many_faces(frame) or []
+            faces = detector(frame) or []
         image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         image = ImageOps.contain(image, (850, 510), Image.LANCZOS)
         scale_x = image.width / frame.shape[1]
