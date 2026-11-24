@@ -91,12 +91,12 @@ def job_fingerprint(folder: str, output_path: str, sources: list,
             'size': stat.st_size,
             'mtime_ns': stat.st_mtime_ns,
             'embedding': [float(n) for n in item['embedding']],
-        }
+        })
         if len(item.get('embeddings') or []) > 1:
             references[-1]['embeddings'] = [
                 [float(value) for value in vector]
                 for vector in item['embeddings']
-            ])
+            ]
     record = {
         'version': 1,
         'folder': str(folder_path),
