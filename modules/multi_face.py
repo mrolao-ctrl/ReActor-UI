@@ -10,6 +10,7 @@ import numpy as np
 
 from modules.face_selector import MIN_MARGIN, MIN_SIMILARITY, normalized_embedding
 from modules.identity_references import face_similarity, reference_vectors
+from modules.recognition_enhancements import find_rotated_matches
 
 
 def prepare_assignments(assignments: Iterable[dict], load_face: Callable[[str], Any]) -> list:
@@ -91,11 +92,34 @@ def swap_assigned_faces(
     assignments: list,
     get_faces: Callable[[Any], Iterable[Any]],
     swap_face: Callable[[Any, Any, Any], Any],
+    adaptive: bool = False,
+    tracker=None,
+    frame_index=None,
+    check_cancelled=None,
 ) -> tuple:
-    """Run face detection on unchanged frame; swap selected matches in turn."""
-    matches = match_distinct_faces(get_faces(frame), assignments)
+    """Match once against original pixels, then optionally rescue hard poses."""
+    detections = list(get_faces(frame) or [])
+    matches = match_distinct_faces(detections, assignments)
+    accepted = {
+        i: face for assignment, face in matches
+        for i, current in enumerate(assignments) if current is assignment
+    }
+    if adaptive and len(accepted) < len(assignments):
+        accepted.update(find_rotated_matches(
+            frame, get_faces, assignments, accepted,
+            check_cancelled=check_cancelled
+        ))
+    if tracker is not None and frame_index is not None:
+        accepted.update(tracker.augment(
+            'normal', frame_index, detections, accepted, assignments
+        ))
+
     boxes = []
-    for assignment, target in matches:
-        frame = swap_face(assignment['source_face'], target, frame)
+    # Preserve source/identity order; identify original faces before swapping.
+    for i in sorted(accepted):
+        if check_cancelled:
+            check_cancelled()
+        target = accepted[i]
+        frame = swap_face(assignments[i]['source_face'], target, frame)
         boxes.append(tuple(map(float, target.bbox)))
     return frame, boxes
