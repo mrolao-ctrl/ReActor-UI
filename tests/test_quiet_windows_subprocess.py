@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 from modules import utilities as util
 
@@ -57,7 +57,7 @@ class WindowsQuietSubprocessTests(unittest.TestCase):
         self.assertEqual(subprocess.STDOUT, call.call_args.kwargs['stderr'])
 
     def test_ffprobe_fps_uses_quiet_flags(self):
-        process = Mock()
+        process = MagicMock()
         process.returncode = 0
         process.communicate.return_value = (b'30/1', b'')
         process.__enter__ = Mock(return_value=process)
