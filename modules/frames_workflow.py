@@ -91,7 +91,12 @@ def job_fingerprint(folder: str, output_path: str, sources: list,
             'size': stat.st_size,
             'mtime_ns': stat.st_mtime_ns,
             'embedding': [float(n) for n in item['embedding']],
-        })
+        }
+        if len(item.get('embeddings') or []) > 1:
+            references[-1]['embeddings'] = [
+                [float(value) for value in vector]
+                for vector in item['embeddings']
+            ])
     record = {
         'version': 1,
         'folder': str(folder_path),
@@ -113,6 +118,10 @@ def job_fingerprint(folder: str, output_path: str, sources: list,
     # resumable jobs from previous versions still work without invalidation.
     if modules.globals.vr_stereo_mode:
         record['vr_stereo_mode'] = True
+    if modules.globals.adaptive_face_detection:
+        record['adaptive_face_detection'] = True
+    if modules.globals.temporal_face_tracking:
+        record['temporal_face_tracking'] = True
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode('utf-8')).hexdigest()
 
 
@@ -229,6 +238,11 @@ def run_existing_frames(
         face_swapper.prepare_multi_assignments()
         if modules.globals.face_assignments else None
     )
+    from modules.recognition_enhancements import TemporalIdentityTracker
+    tracker = (
+        TemporalIdentityTracker()
+        if modules.globals.temporal_face_tracking and prepared else None
+    )
     single_source = None if prepared else face_swapper.load_source_face(
         modules.globals.source_path
     )
@@ -258,6 +272,10 @@ def run_existing_frames(
             job_control.check_cancelled()
             output_frame = work / f'{index:04d}.png'
             if png_is_readable(str(output_frame)):
+                # Resumed frames have no confident original detections to
+                # anchor the next identity; never continue a stale track.
+                if tracker is not None:
+                    tracker.reset()
                 skipped += 1
                 bar.update(1)
                 progress_events.report('Processing existing PNGs', bar.n, len(input_paths))
@@ -265,7 +283,8 @@ def run_existing_frames(
             frame = read_image(original, 'existing PNG input')
             swapped = face_swapper.process_frame(
                 single_source, frame, prepared_assignments=prepared,
-                frame_path=str(output_frame)
+                frame_path=str(output_frame),
+                tracker=tracker, frame_index=index - 1
             )
             if enhancer_enabled:
                 swapped = face_enhancer.process_frame(
