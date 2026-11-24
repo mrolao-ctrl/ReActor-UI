@@ -15,6 +15,7 @@ from modules import utilities as util
 class ProbeTests(unittest.TestCase):
     def test_successful_ffprobe_uses_existing_media_launcher(self):
         process = MagicMock()
+        process.__enter__.return_value = process
         process.communicate.return_value = (b'30000/1001\n', b'')
         process.returncode = 0
         with patch.object(util, '_start_ffmpeg', return_value=process) as start, \
@@ -48,6 +49,7 @@ class ProbeTests(unittest.TestCase):
 
     def test_ffprobe_exit_failure_falls_back_to_opencv(self):
         process = MagicMock()
+        process.__enter__.return_value = process
         process.communicate.return_value = (b'', b'Cannot read stream metadata')
         process.returncode = 1
         with patch.object(util, '_start_ffmpeg', return_value=process), \
@@ -94,6 +96,7 @@ class ProbeTests(unittest.TestCase):
 
     def test_30fps_fallback_if_probe_returns_invalid_number(self):
         process = MagicMock()
+        process.__enter__.return_value = process
         process.communicate.return_value = (b'0/0', b'')
         process.returncode = 0
         with patch.object(util, '_start_ffmpeg', return_value=process), \
