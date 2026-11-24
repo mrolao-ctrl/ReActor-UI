@@ -1993,6 +1993,7 @@ def open_preview_frame_picker() -> None:
         state['diagnostics'] = FaceDiagnosticDialog(
             picker, state['frame'], modules.globals.face_assignments,
             get_many_faces, vr_stereo=bool(modules.globals.vr_stereo_mode),
+            adaptive=bool(modules.globals.adaptive_face_detection),
             icon_setter=_set_app_icon
         )
 
