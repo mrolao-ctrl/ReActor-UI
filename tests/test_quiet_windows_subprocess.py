@@ -57,10 +57,17 @@ class WindowsQuietSubprocessTests(unittest.TestCase):
         self.assertEqual(subprocess.STDOUT, call.call_args.kwargs['stderr'])
 
     def test_ffprobe_fps_uses_quiet_flags(self):
+        process = Mock()
+        process.returncode = 0
+        process.communicate.return_value = (b'30/1', b'')
+        process.__enter__ = Mock(return_value=process)
+        process.__exit__ = Mock(return_value=None)
         with patch.object(util.platform, 'system', return_value='Windows'), \
-             patch.object(util.subprocess, 'check_output', return_value=b'30/1') as call:
+             patch.object(util.subprocess, 'Popen', return_value=process) as call:
             self.assertEqual(30.0, util.detect_fps('C:/video.mp4'))
         self.assertEqual(CREATE_NO_WINDOW, call.call_args.kwargs['creationflags'])
+        self.assertEqual('ffprobe', call.call_args.args[0][0])
+        self.assertEqual(subprocess.PIPE, call.call_args.kwargs['stdout'])
 
     def test_png_export_and_probe_use_same_windows_quiet_options(self):
         source = (Path(__file__).resolve().parents[1] /
