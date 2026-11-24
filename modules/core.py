@@ -326,8 +326,11 @@ def start() -> None:
 
 
 def destroy() -> None:
-    if modules.globals.target_path:
-        clean_temp(modules.globals.target_path)
+    # Successful exports clean their temp frames at the end of start().
+    # Never remove temporary PNGs merely because the user closes the app:
+    # a failure after Face Swap (for example Windows WinError 448 in ffprobe)
+    # may have left a complete 1,949-frame render ready for MP4 assembly.
+    # This is essential even when the user did not toggle Keep frames.
     quit()
 
 
