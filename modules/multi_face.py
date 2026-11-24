@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, List, Tuple
 import numpy as np
 
 from modules.face_selector import MIN_MARGIN, MIN_SIMILARITY, normalized_embedding
+from modules.identity_references import face_similarity, reference_vectors
 
 
 def prepare_assignments(assignments: Iterable[dict], load_face: Callable[[str], Any]) -> list:
@@ -17,14 +18,14 @@ def prepare_assignments(assignments: Iterable[dict], load_face: Callable[[str], 
     sources = {}
     for assignment in assignments:
         source_path = assignment['source_path']
-        ref = np.asarray(assignment['embedding'], dtype=np.float32).reshape(-1)
-        size = np.linalg.norm(ref)
-        if not np.isfinite(size) or size < 1e-8:
+        references = reference_vectors(assignment)
+        if not references:
             raise ValueError('Invalid identity embedding')
         if source_path not in sources:
             sources[source_path] = load_face(source_path)
         prepared.append({
-            'embedding': ref / size,
+            'embedding': references[0],
+            'embeddings': references,
             'source_face': sources[source_path],
             'source_path': source_path,
         })
@@ -45,19 +46,12 @@ def match_distinct_faces(
     detections = list(faces or [])
     if not detections or not assignments:
         return []
-    vectors = [normalized_embedding(face) for face in detections]
-    references = [np.asarray(a['embedding'], dtype=np.float32).reshape(-1)
-                  for a in assignments]
-
     scores = {}
-    for i, ref in enumerate(references):
-        norm = float(np.linalg.norm(ref))
-        if not np.isfinite(norm) or norm < 1e-8:
-            continue
-        ref = ref / norm
-        for j, vector in enumerate(vectors):
-            if vector is not None and vector.shape == ref.shape:
-                scores[i, j] = float(np.dot(ref, vector))
+    for i, assignment in enumerate(assignments):
+        for j, face in enumerate(detections):
+            score = face_similarity(face, assignment)
+            if score is not None:
+                scores[i, j] = score
 
     proposals = []
     for i, assignment in enumerate(assignments):
