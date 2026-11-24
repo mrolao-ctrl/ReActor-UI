@@ -69,9 +69,17 @@ def _unrotate_face(face, inverse, original_shape):
     top, bottom = max(0.0, float(top)), min(float(height), float(bottom))
     if right - left < 4 or bottom - top < 4:
         return None
-    # The face remains an InsightFace Face with all source attributes (e.g.
-    # normed_embedding), but alignment coordinates are in the original frame.
-    result = copy.copy(face)
+    # InsightFace's Face inherits dict and returns None for unknown
+    # attributes, including __setstate__. copy.copy(face) therefore crashes
+    # in copy._reconstruct with "TypeError: 'NoneType' object is not callable"
+    # as soon as adaptive detection finds a usable rotated face.
+    #
+    # Reconstruct dict-backed faces through their own initializer, which
+    # restores both mapping keys and Face attributes (including embedding).
+    # Keep the ordinary shallow copy for non-dict test/custom face objects.
+    # Never change the original detection; INSwapper needs original-frame
+    # keypoints in a fresh Face of the same type.
+    result = type(face)(dict(face)) if isinstance(face, dict) else copy.copy(face)
     result.bbox = np.asarray([left, top, right, bottom], dtype=np.float32)
     result.kps = points @ linear.T + offset
     return result
