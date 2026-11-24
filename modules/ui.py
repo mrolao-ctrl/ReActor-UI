@@ -464,7 +464,41 @@ def create_root(start: Callable[[], None], destroy: Callable[[], None]) -> ctk.C
              'same reference on both views. Leave off for normal videos.',
         anchor='w', justify='left', wraplength=810, text_color=MUTED
     ).grid(row=6, column=0, columnspan=2,
-           padx=22, pady=(0, 17), sticky='ew')
+           padx=22, pady=(0, 10), sticky='ew')
+
+    adaptive_value = ctk.BooleanVar(
+        value=bool(modules.globals.adaptive_face_detection)
+    )
+    ctk.CTkSwitch(
+        processing, text='Adaptive detection (angled faces)',
+        variable=adaptive_value,
+        command=lambda: setattr(
+            modules.globals, 'adaptive_face_detection',
+            bool(adaptive_value.get())
+        )
+    ).grid(row=7, column=0, columnspan=2,
+           padx=22, pady=(4, 8), sticky='w')
+    temporal_value = ctk.BooleanVar(
+        value=bool(modules.globals.temporal_face_tracking)
+    )
+    ctk.CTkSwitch(
+        processing, text='Temporal identity tracking (slower)',
+        variable=temporal_value,
+        command=lambda: setattr(
+            modules.globals, 'temporal_face_tracking',
+            bool(temporal_value.get())
+        )
+    ).grid(row=8, column=0, columnspan=2,
+           padx=22, pady=(0, 6), sticky='w')
+    ctk.CTkLabel(
+        processing,
+        text='For difficult angles, add several reference frames in Step 02. '
+             'Adaptive detection tries extra rotations only when a person is '
+             'not matched. Temporal tracking processes video frames in order '
+             '(slower); individual Preview frames have no prior history.',
+        anchor='w', justify='left', wraplength=810, text_color=MUTED
+    ).grid(row=9, column=0, columnspan=2,
+           padx=22, pady=(0, 16), sticky='ew')
 
     occlusion = _section(
         content, '04   OCCLUSION PROTECTION',
@@ -663,6 +697,8 @@ def open_settings() -> None:
         'keep_audio': bool(modules.globals.keep_audio),
         'keep_frames': bool(modules.globals.keep_frames),
         'vr_stereo_mode': bool(modules.globals.vr_stereo_mode),
+        'adaptive_face_detection': bool(modules.globals.adaptive_face_detection),
+        'temporal_face_tracking': bool(modules.globals.temporal_face_tracking),
         'occlusion_protection': bool(modules.globals.occlusion_protection),
         'occlusion_landmark_mode': modules.globals.occlusion_landmark_mode,
         'enhancer_enabled': bool(modules.globals.fp_ui.get('face_enhancer', False)),
@@ -756,7 +792,7 @@ def open_settings() -> None:
         wraplength=560, justify='left', text_color=MUTED
     ).grid(row=8, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
     ctk.CTkLabel(
-        content, text='Current Keep FPS/Audio/Frames, VR/Stereo, XSeg and Enhancer '
+        content, text='Current FPS/Audio/Frames, VR/Stereo, adaptive detection, tracking, XSeg and Enhancer '
                       'switches on the main screen are also saved as defaults.',
         wraplength=560, justify='left', text_color=MUTED
     ).grid(row=9, column=0, columnspan=2, padx=8, pady=(3, 12), sticky='ew')
@@ -793,6 +829,8 @@ def open_settings() -> None:
         modules.globals.video_quality = checked['video_quality']
         modules.globals.video_encoder = checked['video_encoder']
         modules.globals.vr_stereo_mode = checked['vr_stereo_mode']
+        modules.globals.adaptive_face_detection = checked['adaptive_face_detection']
+        modules.globals.temporal_face_tracking = checked['temporal_face_tracking']
         modules.globals.models_directory = checked['models_directory']
         modules.globals.frames_fps = checked['frames_fps']
         frames_fps_entry.delete(0, 'end')
@@ -1284,17 +1322,26 @@ def update_assignments_label() -> None:
             f'Person {index + 1:02d}\n'
             + (f'Frame {frame_number}\n' if frame_number is not None else '')
             + Path(source_path).name
+            + f"\n{len(assignment.get('embeddings') or [assignment['embedding']])} target references"
         )
         ctk.CTkLabel(
             row, text=details, anchor='w', justify='left',
             text_color=TEXT, wraplength=225
         ).grid(row=1, column=2, padx=(12, 7), pady=(0, 12), sticky='w')
         ctk.CTkButton(
+            row, text='+ Reference', width=116, height=34,
+            fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
+            text_color=TEXT, border_width=1, border_color=BORDER,
+            command=lambda position=index: open_face_picker(
+                multiple=True, reference_index=position
+            )
+        ).grid(row=1, column=3, padx=(7, 4), pady=(0, 12), sticky='e')
+        ctk.CTkButton(
             row, text='Remove', width=90, height=34,
             fg_color=SECONDARY_BG, hover_color=SECONDARY_HOVER,
             text_color=TEXT, border_width=1, border_color=BORDER,
             command=lambda position=index: remove_assignment(position)
-        ).grid(row=1, column=3, padx=(7, 13), pady=(0, 12), sticky='e')
+        ).grid(row=1, column=4, padx=(4, 13), pady=(0, 12), sticky='e')
 
 
 def clear_assignments() -> None:
@@ -1445,7 +1492,7 @@ def select_target_path() -> None:
     )
 
 
-def open_face_picker(multiple: bool = False) -> None:
+def open_face_picker(multiple: bool = False, reference_index=None) -> None:
     """Select a face on an original video frame and remember its identity.
 
     All detection happens on the local machine. The selected embedding remains
@@ -1458,7 +1505,11 @@ def open_face_picker(multiple: bool = False) -> None:
 
     picker = ctk.CTkToplevel(ROOT, fg_color=BG)
     _set_app_icon(picker)
-    picker.title('Add person + reference photo' if multiple else 'Choose the person to replace')
+    picker.title(
+        'Add another reference frame' if reference_index is not None
+        else 'Add person + reference photo' if multiple
+        else 'Choose the person to replace'
+    )
     picker.geometry('900x720')
     picker.minsize(650, 650)
     _bring_dialog_to_front(picker)
@@ -1557,6 +1608,58 @@ def open_face_picker(multiple: bool = False) -> None:
                             text='Unable to crop the selected face. Load another frame.'
                         )
                         return
+                    if reference_index is not None:
+                        if reference_index >= len(modules.globals.face_assignments):
+                            feedback.configure(text='Person mapping no longer exists.')
+                            return
+                        current = modules.globals.face_assignments[reference_index]
+                        refs = current.get('embeddings')
+                        if refs is None:
+                            refs = [current['embedding'].copy()]
+                            current['embeddings'] = refs
+                        if len(refs) >= 6:
+                            feedback.configure(
+                                text='A maximum of 6 target reference frames is supported.'
+                            )
+                            return
+                        if any(
+                            state['frame_number'] == previous_frame
+                            and float(embedding @ existing) > 0.995
+                            for existing, previous_frame in zip(
+                                refs, current.get('reference_frames') or
+                                [current.get('target_frame')]
+                            )
+                        ):
+                            feedback.configure(
+                                text='That face is already a reference in this frame.'
+                            )
+                            return
+                        # Never enroll a face that is clearly already mapped
+                        # to another person, even if selected in the GUI.
+                        for other in modules.globals.face_assignments:
+                            if other is current:
+                                continue
+                            for other_ref in other.get('embeddings') or [other['embedding']]:
+                                if float(embedding @ other_ref) > 0.92:
+                                    feedback.configure(
+                                        text='This face belongs to a different mapped person.'
+                                    )
+                                    return
+                        refs.append(embedding.copy())
+                        current.setdefault('reference_frames', [
+                            current.get('target_frame')
+                        ]).append(state['frame_number'])
+                        current.setdefault('reference_crops', [
+                            current.get('target_crop')
+                        ]).append(crop)
+                        update_assignments_label()
+                        update_status(
+                            f'Person {reference_index + 1:02d}: '
+                            f'{len(refs)} target reference frames.'
+                        )
+                        picker.destroy()
+                        return
+
                     photo = ctk.filedialog.askopenfilename(
                         title='Select the source photo for this person',
                         initialdir=RECENT_DIRECTORY_SOURCE,
@@ -1566,16 +1669,19 @@ def open_face_picker(multiple: bool = False) -> None:
                         feedback.configure(text='Choose a valid source photo to add the person.')
                         return
                     for current in modules.globals.face_assignments:
-                        score = float(embedding @ current['embedding'])
-                        if score > 0.92:
-                            feedback.configure(
-                                text='This person is already mapped. Choose another person '
-                                     'or remove that person’s row to replace their photo.'
-                            )
-                            return
+                        for existing in current.get('embeddings') or [current['embedding']]:
+                            if float(embedding @ existing) > 0.92:
+                                feedback.configure(
+                                    text='This person is already mapped. Use + Reference '
+                                         'on their row to add a different pose.'
+                                )
+                                return
                     RECENT_DIRECTORY_SOURCE = os.path.dirname(photo)
                     modules.globals.face_assignments.append({
                         'embedding': embedding.copy(),
+                        'embeddings': [embedding.copy()],
+                        'reference_frames': [state['frame_number']],
+                        'reference_crops': [crop],
                         'source_path': photo,
                         'target_crop': crop,
                         'target_frame': state['frame_number'],
